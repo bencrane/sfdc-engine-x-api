@@ -7,6 +7,7 @@ from app.routers.admin import router as admin_router
 from app.routers.auth import router as auth_router
 from app.routers.clients import router as clients_router
 from app.routers.connections import router as connections_router
+from app.routers.topology import router as topology_router
 from app.routers.tokens import router as tokens_router
 from app.routers.users import router as users_router
 from app.config import settings
@@ -30,6 +31,7 @@ app.include_router(admin_router)
 app.include_router(auth_router)
 app.include_router(clients_router)
 app.include_router(connections_router)
+app.include_router(topology_router)
 app.include_router(users_router)
 app.include_router(tokens_router)
 
