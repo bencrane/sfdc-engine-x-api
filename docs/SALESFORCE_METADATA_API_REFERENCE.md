@@ -471,6 +471,109 @@ Flow metadata lifecycle is primarily Metadata API-based. Tooling API supports qu
 }
 ```
 
+<!-- EXPANDED -->
+#### Metadata API Flow XML (complete deploy example)
+
+The following is a complete `flows/Invoice_Record_Triggered_Automation.flow-meta.xml` example for a record-triggered Flow on `Invoice__c` that:
+- runs on create
+- checks whether `Amount__c > 1000`
+- performs a field update when condition is met
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<Flow xmlns="http://soap.sforce.com/2006/04/metadata">
+  <apiVersion>{api_version_number_only}</apiVersion>
+  <areMetricsLoggedToDataCloud>false</areMetricsLoggedToDataCloud>
+  <assignments>
+    <name>Set_Priority_High</name>
+    <label>Set Priority High</label>
+    <locationX>420</locationX>
+    <locationY>430</locationY>
+    <assignmentItems>
+      <assignToReference>$Record.Priority__c</assignToReference>
+      <operator>Assign</operator>
+      <value>
+        <stringValue>High</stringValue>
+      </value>
+    </assignmentItems>
+    <connector>
+      <targetReference>Update_Invoice</targetReference>
+    </connector>
+  </assignments>
+  <decisions>
+    <name>Amount_Greater_Than_1000</name>
+    <label>Amount Greater Than 1000</label>
+    <locationX>420</locationX>
+    <locationY>290</locationY>
+    <defaultConnectorLabel>Default Outcome</defaultConnectorLabel>
+    <rules>
+      <name>AmountAboveThreshold</name>
+      <conditionLogic>and</conditionLogic>
+      <conditions>
+        <leftValueReference>$Record.Amount__c</leftValueReference>
+        <operator>GreaterThan</operator>
+        <rightValue>
+          <numberValue>1000</numberValue>
+        </rightValue>
+      </conditions>
+      <connector>
+        <targetReference>Set_Priority_High</targetReference>
+      </connector>
+      <label>Amount Above Threshold</label>
+    </rules>
+  </decisions>
+  <environments>Default</environments>
+  <interviewLabel>Invoice Record Triggered {!$Flow.CurrentDateTime}</interviewLabel>
+  <label>Invoice Record Triggered Automation</label>
+  <processMetadataValues>
+    <name>BuilderType</name>
+    <value>
+      <stringValue>LightningFlowBuilder</stringValue>
+    </value>
+  </processMetadataValues>
+  <processMetadataValues>
+    <name>CanvasMode</name>
+    <value>
+      <stringValue>AUTO_LAYOUT_CANVAS</stringValue>
+    </value>
+  </processMetadataValues>
+  <processMetadataValues>
+    <name>OriginBuilderType</name>
+    <value>
+      <stringValue>LightningFlowBuilder</stringValue>
+    </value>
+  </processMetadataValues>
+  <processType>AutoLaunchedFlow</processType>
+  <recordUpdates>
+    <name>Update_Invoice</name>
+    <label>Update Invoice</label>
+    <locationX>420</locationX>
+    <locationY>560</locationY>
+    <inputReference>$Record</inputReference>
+  </recordUpdates>
+  <start>
+    <locationX>420</locationX>
+    <locationY>140</locationY>
+    <connector>
+      <targetReference>Amount_Greater_Than_1000</targetReference>
+    </connector>
+    <doesRequireRecordChangedToMeetCriteria>false</doesRequireRecordChangedToMeetCriteria>
+    <filterLogic>and</filterLogic>
+    <filters>
+      <field>Id</field>
+      <operator>IsNull</operator>
+      <value>
+        <booleanValue>false</booleanValue>
+      </value>
+    </filters>
+    <object>Invoice__c</object>
+    <recordTriggerType>Create</recordTriggerType>
+    <triggerType>RecordAfterSave</triggerType>
+  </start>
+  <status>Active</status>
+</Flow>
+```
+
 ### 3.9 Delete a Custom Field
 
 **Method:** `DELETE`  
@@ -1037,6 +1140,119 @@ Standard headers:
 </CustomObject>
 ```
 
+<!-- EXPANDED -->
+#### Realistic deployable object XML (`objects/Invoice__c.object`)
+
+The following example includes an `AutoNumber` name field and 6+ inline field definitions: Text, Currency, Picklist, Date, Lookup, and Checkbox.
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
+  <allowInChatterGroups>false</allowInChatterGroups>
+  <deploymentStatus>Deployed</deploymentStatus>
+  <enableActivities>true</enableActivities>
+  <enableBulkApi>true</enableBulkApi>
+  <enableFeeds>false</enableFeeds>
+  <enableHistory>true</enableHistory>
+  <enableReports>true</enableReports>
+  <enableSearch>true</enableSearch>
+  <externalSharingModel>Private</externalSharingModel>
+  <label>Invoice</label>
+  <nameField>
+    <displayFormat>INV-{000000}</displayFormat>
+    <label>Invoice Number</label>
+    <type>AutoNumber</type>
+  </nameField>
+  <pluralLabel>Invoices</pluralLabel>
+  <sharingModel>ReadWrite</sharingModel>
+  <startsWith>Consonant</startsWith>
+
+  <fields>
+    <fullName>Customer_Name__c</fullName>
+    <label>Customer Name</label>
+    <length>255</length>
+    <required>true</required>
+    <trackHistory>true</trackHistory>
+    <type>Text</type>
+  </fields>
+
+  <fields>
+    <fullName>Amount__c</fullName>
+    <label>Amount</label>
+    <precision>16</precision>
+    <scale>2</scale>
+    <required>true</required>
+    <trackHistory>true</trackHistory>
+    <type>Currency</type>
+  </fields>
+
+  <fields>
+    <fullName>Status__c</fullName>
+    <label>Status</label>
+    <required>true</required>
+    <trackHistory>true</trackHistory>
+    <type>Picklist</type>
+    <valueSet>
+      <restricted>true</restricted>
+      <valueSetDefinition>
+        <sorted>false</sorted>
+        <value>
+          <fullName>Draft</fullName>
+          <default>true</default>
+          <label>Draft</label>
+        </value>
+        <value>
+          <fullName>Sent</fullName>
+          <default>false</default>
+          <label>Sent</label>
+        </value>
+        <value>
+          <fullName>Paid</fullName>
+          <default>false</default>
+          <label>Paid</label>
+        </value>
+      </valueSetDefinition>
+    </valueSet>
+  </fields>
+
+  <fields>
+    <fullName>Invoice_Date__c</fullName>
+    <label>Invoice Date</label>
+    <required>true</required>
+    <trackHistory>true</trackHistory>
+    <type>Date</type>
+  </fields>
+
+  <fields>
+    <fullName>Account__c</fullName>
+    <deleteConstraint>SetNull</deleteConstraint>
+    <label>Account</label>
+    <referenceTo>Account</referenceTo>
+    <relationshipLabel>Invoices</relationshipLabel>
+    <relationshipName>Invoices</relationshipName>
+    <required>false</required>
+    <trackHistory>true</trackHistory>
+    <type>Lookup</type>
+  </fields>
+
+  <fields>
+    <fullName>Is_Overdue__c</fullName>
+    <defaultValue>false</defaultValue>
+    <label>Is Overdue</label>
+    <trackHistory>true</trackHistory>
+    <type>Checkbox</type>
+  </fields>
+
+  <fields>
+    <fullName>Due_Date__c</fullName>
+    <label>Due Date</label>
+    <required>false</required>
+    <trackHistory>true</trackHistory>
+    <type>Date</type>
+  </fields>
+</CustomObject>
+```
+
 ### Add Fields
 
 - **Tooling API:** `POST/PATCH` on `CustomField` for supported field types.
@@ -1086,6 +1302,27 @@ Three common read surfaces:
 
 - Flow metadata deployment and versioning behavior is fully represented in Metadata API package workflows.
 - Tooling API can expose/query flow records and selected updates depending on type/version constraints.
+
+<!-- EXPANDED -->
+### Flow Deploy Artifact (Metadata API)
+
+Deploy path for flow metadata files:
+- `flows/{FlowApiName}.flow-meta.xml`
+
+Package entry:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<Package xmlns="http://soap.sforce.com/2006/04/metadata">
+  <types>
+    <members>Invoice_Record_Triggered_Automation</members>
+    <name>Flow</name>
+  </types>
+  <version>{api_version_number_only}</version>
+</Package>
+```
+
+Flow XML example is included in Section 3.8 (`flows/Invoice_Record_Triggered_Automation.flow-meta.xml`) and is deployable in a Metadata API ZIP package.
 
 ### Validation Rule Notes
 
@@ -1166,6 +1403,151 @@ REST responses may include:
 
 This header reports current API consumption relative to limit.
 
+<!-- EXPANDED -->
+### Published Daily API Entitlement Baselines and Formula
+
+The limits documentation and edition tables publish daily API request entitlements using a baseline-plus-license model for paid editions.
+
+Formula form:
+
+`daily_api_limit = base_org_entitlement + (number_of_licenses × per_license_amount)`
+
+Published baseline values:
+
+| Edition | Base Org Entitlement | Per-License Amount | Example Formula |
+|---|---:|---:|---|
+| Developer Edition | 15,000 requests / 24 hours | N/A | Fixed at 15,000 |
+| Enterprise Edition | 100,000 requests / 24 hours | 1,000 per applicable user license | `100000 + (enterprise_user_licenses * 1000)` |
+| Unlimited Edition | 100,000 requests / 24 hours | 5,000 per applicable user license | `100000 + (unlimited_user_licenses * 5000)` |
+
+Notes on entitlement interpretation:
+- Daily API limits are evaluated on a rolling 24-hour window.
+- Purchased add-ons and contract-specific terms can increase effective entitlement.
+- API consumption is shared across all API surfaces that count against org request limits.
+
+<!-- EXPANDED -->
+### `Sforce-Limit-Info` Header: Exact Format and Parsing
+
+Header format:
+
+`Sforce-Limit-Info: api-usage=1234/100000`
+
+Header fields:
+- `api-usage` current/maximum
+  - current requests consumed in the rolling 24-hour window
+  - maximum allowed requests in that same window
+
+Code-agnostic parsing example:
+
+1. Read response header `Sforce-Limit-Info`.
+2. Split on `=`; keep right side (`1234/100000`).
+3. Split on `/`.
+4. Parse left value as `current = 1234`.
+5. Parse right value as `max = 100000`.
+6. Compute utilization: `current / max`.
+
+Where it appears:
+- REST API responses include this header for API usage reporting.
+- It can be used on every response where present to maintain a local rolling usage counter.
+
+When approaching limit:
+- Apply request throttling before hard failures.
+- Reduce batch size and request concurrency.
+- Re-check `Sforce-Limit-Info` after backoff intervals before issuing additional calls.
+
+<!-- EXPANDED -->
+### Concurrent Metadata Deploy Processing and Queue Behavior
+
+Salesforce Metadata deploy processing allows only one actively executing deployment per org at a time.
+
+Behavior for additional deploy submissions:
+- If a deployment is already executing, a subsequent deploy request is typically accepted into queue (`Queued` / `Pending` state).
+- If queue/concurrency protections are exceeded, additional requests can be rejected.
+
+Representative queue-accepted response (REST Metadata API):
+
+```json
+{
+  "id": "0Afxx0000004ABCHA2",
+  "state": "Queued"
+}
+```
+
+Representative rejection shape (REST):
+
+```json
+[
+  {
+    "message": "A metadata deployment is already in progress.",
+    "errorCode": "CONCURRENT_METADATA_OPERATION"
+  }
+]
+```
+
+Representative rejection shape (SOAP fault):
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">
+  <soapenv:Body>
+    <soapenv:Fault>
+      <faultcode>sf:CONCURRENT_METADATA_OPERATION</faultcode>
+      <faultstring>A metadata operation is already in progress.</faultstring>
+      <detail>
+        <ApiFault xmlns="http://soap.sforce.com/2006/04/metadata">
+          <exceptionCode>CONCURRENT_METADATA_OPERATION</exceptionCode>
+          <exceptionMessage>A metadata operation is already in progress.</exceptionMessage>
+        </ApiFault>
+      </detail>
+    </soapenv:Fault>
+  </soapenv:Body>
+</soapenv:Envelope>
+```
+
+<!-- EXPANDED -->
+### `REQUEST_LIMIT_EXCEEDED`: Response Shapes, Status Codes, and Retry Behavior
+
+REST error response:
+
+**HTTP status:** `403 Forbidden`
+
+```json
+[
+  {
+    "message": "TotalRequests Limit exceeded.",
+    "errorCode": "REQUEST_LIMIT_EXCEEDED"
+  }
+]
+```
+
+SOAP error response:
+
+**HTTP status:** `500` (SOAP Fault) or API gateway-translated failure depending on client stack
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">
+  <soapenv:Body>
+    <soapenv:Fault>
+      <faultcode>sf:REQUEST_LIMIT_EXCEEDED</faultcode>
+      <faultstring>TotalRequests Limit exceeded.</faultstring>
+      <detail>
+        <ApiFault xmlns="urn:fault.partner.soap.sforce.com">
+          <exceptionCode>REQUEST_LIMIT_EXCEEDED</exceptionCode>
+          <exceptionMessage>TotalRequests Limit exceeded.</exceptionMessage>
+        </ApiFault>
+      </detail>
+    </soapenv:Fault>
+  </soapenv:Body>
+</soapenv:Envelope>
+```
+
+Retry pattern (rolling 24-hour window):
+1. On limit error, pause requests with exponential backoff intervals.
+2. On each retry cycle, inspect `Sforce-Limit-Info` for current/max.
+3. Resume traffic only when utilization is back below the rejection threshold.
+4. Continue smoothing request rate because the limit is rolling, not a fixed midnight reset.
+
 ---
 
 ## 10) Gotchas and Edge Cases
@@ -1175,9 +1557,76 @@ This header reports current API consumption relative to limit.
 - Fields referenced by formulas, validation rules, flows/processes, reports, list views, layouts, and Apex can block deletion.
 - Resolve all references before DELETE/destructive deploy.
 
+<!-- EXPANDED -->
+#### Detection / Error / Resolution
+
+**Detection**
+- Tooling query for field and owning object:
+  - `GET {instance_url}/services/data/{api_version}/tooling/query?q=SELECT+Id,DeveloperName,TableEnumOrId+FROM+CustomField+WHERE+DeveloperName='Amount'`
+- Dependency graph query (where available):
+  - `GET {instance_url}/services/data/{api_version}/tooling/query?q=SELECT+MetadataComponentId,RefMetadataComponentId,MetadataComponentName,RefMetadataComponentName+FROM+MetadataComponentDependency+WHERE+RefMetadataComponentName='Invoice__c.Amount__c'`
+- Metadata retrieve to inspect flow/layout/validation references before destructive deploy.
+
+**Error**
+- Common REST delete/deploy failure shapes:
+
+```json
+[
+  {
+    "message": "Cannot delete custom field Invoice__c.Amount__c because it is referenced by other metadata.",
+    "errorCode": "DEPENDENCY_EXISTS"
+  }
+]
+```
+
+```json
+[
+  {
+    "message": "Cannot complete this operation. Referenced object has dependent metadata.",
+    "errorCode": "FIELD_INTEGRITY_EXCEPTION"
+  }
+]
+```
+
+**Resolution**
+1. Remove references (Flow elements, formulas, reports, layout fields, validation rules, automation).
+2. Re-run dependency query/retrieve verification.
+3. Retry `DELETE` (Tooling) or destructive deploy.
+4. If parent object deletion still fails, delete remaining child metadata first.
+
 ### Required Fields on Standard Objects
 
 - Record creation and related metadata operations can fail if object-required fields/business rules are not satisfied.
+
+<!-- EXPANDED -->
+#### Detection / Error / Resolution
+
+**Detection**
+- Describe endpoint:
+  - `GET {instance_url}/services/data/{api_version}/sobjects/Account/describe`
+- Inspect each field where:
+  - `nillable = false`
+  - `defaultedOnCreate = false`
+  - no default value provided
+
+**Error**
+
+```json
+[
+  {
+    "message": "Required fields are missing: [Name]",
+    "errorCode": "REQUIRED_FIELD_MISSING",
+    "fields": [
+      "Name"
+    ]
+  }
+]
+```
+
+**Resolution**
+1. Build record payloads from describe metadata.
+2. Populate all required fields before insert/upsert.
+3. Revalidate after each schema change (new required fields can be introduced).
 
 ### Custom Object Naming Rules
 
@@ -1185,38 +1634,636 @@ This header reports current API consumption relative to limit.
 - Naming has character and uniqueness constraints.
 - Reserved words/system conflicts can block creation.
 
+<!-- EXPANDED -->
+#### Detection / Error / Resolution
+
+**Detection**
+- Validate API name locally against Salesforce-compatible pattern before submit:
+  - `^[A-Za-z][A-Za-z0-9_]{0,39}__c$`
+- Query for collisions:
+  - `GET {instance_url}/services/data/{api_version}/tooling/query?q=SELECT+Id,DeveloperName+FROM+CustomObject+WHERE+DeveloperName='Invoice'`
+
+**Error**
+
+```json
+[
+  {
+    "message": "The field name provided, Invoice-Object__c, is not valid for a custom object.",
+    "errorCode": "INVALID_FIELD"
+  }
+]
+```
+
+```json
+[
+  {
+    "message": "An object with developer name Invoice already exists.",
+    "errorCode": "DUPLICATE_DEVELOPER_NAME"
+  }
+]
+```
+
+**Resolution**
+1. Normalize names to alphanumeric + underscore only.
+2. Ensure uniqueness at object and namespace scope.
+3. Avoid reserved/system names and conflicts with standard objects.
+
 ### Managed vs Unmanaged Package Context
 
 - Managed package metadata can have immutability or subscriber restrictions.
 - Namespace qualification can change member names in metadata manifests.
+
+<!-- EXPANDED -->
+#### Detection / Error / Resolution
+
+**Detection**
+- Tooling query with manageability state:
+  - `GET {instance_url}/services/data/{api_version}/tooling/query?q=SELECT+Id,DeveloperName,NamespacePrefix,ManageableState+FROM+CustomField+WHERE+TableEnumOrId='Invoice__c'`
+- `ManageableState` values identify unmanaged vs managed/installed behavior.
+
+**Error**
+
+```json
+[
+  {
+    "message": "Cannot modify managed object: Invoice__c.Amount__c",
+    "errorCode": "CANNOT_MODIFY_MANAGED_OBJECT"
+  }
+]
+```
+
+```json
+[
+  {
+    "message": "Cannot delete managed component in a subscriber org.",
+    "errorCode": "CANNOT_DELETE_MANAGED_OBJECT"
+  }
+]
+```
+
+**Resolution**
+1. For managed metadata, apply changes in package source org and release a package version.
+2. In subscriber orgs, modify only subscriber-editable settings.
+3. For non-editable managed components, avoid mutate/delete attempts.
 
 ### Namespace Prefix Behavior
 
 - API names may appear as `{namespace}__Component__c` in managed contexts.
 - Manifest members must match namespaced full names where applicable.
 
+<!-- EXPANDED -->
+#### Detection / Error / Resolution
+
+**Detection**
+- Query with namespace:
+  - `GET {instance_url}/services/data/{api_version}/tooling/query?q=SELECT+DeveloperName,NamespacePrefix+FROM+CustomObject+WHERE+DeveloperName='Invoice'`
+- Validate package member full names include namespace when present.
+
+**Error**
+
+```json
+[
+  {
+    "message": "No such metadata member ns__Invoice__c",
+    "errorCode": "INVALID_CROSS_REFERENCE_KEY"
+  }
+]
+```
+
+**Resolution**
+1. Build member names using `NamespacePrefix + '__' + DeveloperName`.
+2. Keep namespaced and non-namespaced identifiers separate in deployment manifests.
+
 ### Sandbox vs Production Behavior Differences
 
 - Validation/test enforcement and available metadata may differ by org type and release state.
 - Deployment/test requirements differ by target environment and settings.
+
+<!-- EXPANDED -->
+#### Detection / Error / Resolution
+
+**Detection**
+- Determine org type:
+  - `GET {instance_url}/services/data/{api_version}/query?q=SELECT+Id,IsSandbox,InstanceName+FROM+Organization`
+
+**Error**
+- Production deploy with insufficient tests can fail with deployment test validation errors:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<checkDeployStatusResponse xmlns="http://soap.sforce.com/2006/04/metadata">
+  <result>
+    <status>Failed</status>
+    <success>false</success>
+    <details>
+      <runTestResult>
+        <numFailures>1</numFailures>
+      </runTestResult>
+      <componentFailures>
+        <problemType>Error</problemType>
+        <problem>Deployment failed because tests did not pass required thresholds.</problem>
+      </componentFailures>
+    </details>
+  </result>
+</checkDeployStatusResponse>
+```
+
+**Resolution**
+1. Select deploy test level based on environment policy:
+   - `NoTestRun`
+   - `RunLocalTests`
+   - `RunAllTestsInOrg`
+   - `RunSpecifiedTests`
+2. Use validation-only (`checkOnly=true`) before commit deploy.
+3. Poll deployment result and parse test failure details before retry.
 
 ### Metadata Deploy Order and Dependencies
 
 - Component dependencies in one deploy package can require specific pre-existing metadata or packaging order.
 - Destructive pre/post manifests are used to control order-sensitive deletes.
 
+<!-- EXPANDED -->
+#### Detection / Error / Resolution
+
+**Detection**
+- Use deploy validation (`checkOnly=true`) and parse `componentFailures`.
+- Query dependency links (where available) before deploy:
+  - `MetadataComponentDependency` Tooling query.
+
+**Error**
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<checkDeployStatusResponse xmlns="http://soap.sforce.com/2006/04/metadata">
+  <result>
+    <status>Failed</status>
+    <success>false</success>
+    <details>
+      <componentFailures>
+        <componentType>Layout</componentType>
+        <fullName>Invoice__c-Invoice Layout</fullName>
+        <problemType>Error</problemType>
+        <problem>MISSING_DEPENDENT_METADATA: In field: field - no CustomField named Invoice__c.Status__c found</problem>
+      </componentFailures>
+    </details>
+  </result>
+</checkDeployStatusResponse>
+```
+
+**Resolution**
+1. Include prerequisites in same deploy package when possible.
+2. Ensure manifests declare dependent members.
+3. Use `destructiveChangesPre.xml` for required pre-delete ordering.
+4. Split into phased deploys when dependency graph cannot be resolved in one transaction.
+
 ### Tooling vs Metadata Field Type Name Differences
 
 - Same conceptual field type can be represented with different property naming patterns across Tooling JSON and Metadata XML.
+
+<!-- EXPANDED -->
+#### Detection / Error / Resolution
+
+**Detection**
+- Compare Tooling `CustomField.Metadata.type` values with Metadata API `<type>` values in retrieved field XML.
+- Retrieve both representations for a known field before generating mutations.
+
+**Error**
+
+```json
+[
+  {
+    "message": "Cannot deserialize instance of complexvalue from VALUE_STRING value MasterDetail",
+    "errorCode": "JSON_PARSER_ERROR"
+  }
+]
+```
+
+**Resolution**
+1. Normalize field type mappings between Tooling JSON and Metadata XML.
+2. Validate payload schema by metadata channel before submit.
 
 ### Compound Fields
 
 - Compound standard fields (for example Address/Name structures) have component-field behavior that affects query/update/delete semantics.
 
+<!-- EXPANDED -->
+#### Detection / Error / Resolution
+
+**Detection**
+- Query field definitions for compound context:
+  - `GET {instance_url}/services/data/{api_version}/query?q=SELECT+QualifiedApiName,DataType,IsCompound,CompoundFieldName+FROM+FieldDefinition+WHERE+EntityDefinition.QualifiedApiName='Account'`
+
+**Error**
+
+```json
+[
+  {
+    "message": "Cannot directly update compound field: BillingAddress",
+    "errorCode": "INVALID_FIELD_FOR_INSERT_UPDATE",
+    "fields": [
+      "BillingAddress"
+    ]
+  }
+]
+```
+
+**Resolution**
+1. Use component fields (`BillingStreet`, `BillingCity`, etc.) for DML.
+2. Treat compound parent fields as read/aggregate representations in many operations.
+
 ### Status Values and Transitions
 
 - Async deploy/retrieve status transitions include queued/in-progress/terminal states.
 - Flow activation/version status changes involve definition/version relationships and may require explicit activation pointers.
+
+<!-- EXPANDED -->
+#### Detection / Error / Resolution
+
+**Detection**
+- Metadata deploy status polling:
+  - `GET {instance_url}/services/data/{api_version}/metadata/deployRequest/{deploy_id}`
+- Flow definition query:
+  - `GET {instance_url}/services/data/{api_version}/tooling/query?q=SELECT+Id,DeveloperName,ActiveVersionId,LatestVersionId+FROM+FlowDefinition+WHERE+DeveloperName='Invoice_Record_Triggered_Automation'`
+
+**Error**
+
+```json
+[
+  {
+    "message": "You can't activate this flow version because it contains validation errors.",
+    "errorCode": "INVALID_STATUS"
+  }
+]
+```
+
+**Resolution**
+1. Ensure target flow version is valid and deployed.
+2. Update definition activation pointer only after successful version deploy.
+3. Re-query to verify `ActiveVersionId` transition completed.
+
+<!-- EXPANDED -->
+### Additional Gotcha: Global Value Set Dependencies
+
+**Detection**
+- Check whether picklist field references a global value set in field metadata retrieve.
+- Query value set references before deleting picklist fields/value sets.
+
+**Error**
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<checkDeployStatusResponse xmlns="http://soap.sforce.com/2006/04/metadata">
+  <result>
+    <status>Failed</status>
+    <success>false</success>
+    <details>
+      <componentFailures>
+        <componentType>GlobalValueSet</componentType>
+        <problemType>Error</problemType>
+        <problem>Cannot delete GlobalValueSet because it is referenced by one or more custom fields.</problem>
+      </componentFailures>
+    </details>
+  </result>
+</checkDeployStatusResponse>
+```
+
+**Resolution**
+1. Move dependent fields off the global value set first.
+2. Deploy updated field metadata.
+3. Retry destructive deletion.
+
+---
+
+<!-- EXPANDED -->
+## 11) Composite API (`composite/sobjects`)
+
+Composite sObject collections support batch create/update/upsert for records of the same sObject type with per-record result arrays.
+
+Base endpoint:
+- `{instance_url}/services/data/{api_version}/composite/sobjects`
+
+Standard headers:
+- `Authorization: Bearer {access_token}`
+- `Content-Type: application/json`
+- `Accept: application/json`
+
+### Batch Create
+
+**Method:** `POST`  
+**URL:** `{instance_url}/services/data/{api_version}/composite/sobjects`
+
+**Request body**
+```json
+{
+  "allOrNone": false,
+  "records": [
+    {
+      "attributes": {
+        "type": "Invoice__c"
+      },
+      "Customer_Name__c": "Acme Corp",
+      "Amount__c": 1250.5,
+      "Status__c": "Draft",
+      "Invoice_Date__c": "2026-02-19"
+    },
+    {
+      "attributes": {
+        "type": "Invoice__c"
+      },
+      "Customer_Name__c": "Global Media",
+      "Amount__c": 950.0,
+      "Status__c": "Draft",
+      "Invoice_Date__c": "2026-02-19"
+    }
+  ]
+}
+```
+
+**Response body**
+```json
+[
+  {
+    "id": "a0Bxx0000008AAA",
+    "success": true,
+    "errors": []
+  },
+  {
+    "id": "a0Bxx0000008AAB",
+    "success": true,
+    "errors": []
+  }
+]
+```
+
+### Batch Update
+
+**Method:** `PATCH`  
+**URL:** `{instance_url}/services/data/{api_version}/composite/sobjects`
+
+**Request body**
+```json
+{
+  "allOrNone": false,
+  "records": [
+    {
+      "attributes": {
+        "type": "Invoice__c"
+      },
+      "Id": "a0Bxx0000008AAA",
+      "Status__c": "Sent",
+      "Is_Overdue__c": false
+    },
+    {
+      "attributes": {
+        "type": "Invoice__c"
+      },
+      "Id": "a0Bxx0000008AAB",
+      "Status__c": "Paid",
+      "Is_Overdue__c": false
+    }
+  ]
+}
+```
+
+**Response body**
+```json
+[
+  {
+    "id": "a0Bxx0000008AAA",
+    "success": true,
+    "errors": []
+  },
+  {
+    "id": "a0Bxx0000008AAB",
+    "success": true,
+    "errors": []
+  }
+]
+```
+
+### Batch Upsert by External ID
+
+**Method:** `PATCH`  
+**URL:** `{instance_url}/services/data/{api_version}/composite/sobjects/Invoice__c/External_Id__c`
+
+**Request body**
+```json
+{
+  "allOrNone": false,
+  "records": [
+    {
+      "attributes": {
+        "type": "Invoice__c"
+      },
+      "External_Id__c": "INV-10001",
+      "Customer_Name__c": "Acme Corp",
+      "Amount__c": 1250.5,
+      "Status__c": "Sent",
+      "Invoice_Date__c": "2026-02-19"
+    },
+    {
+      "attributes": {
+        "type": "Invoice__c"
+      },
+      "External_Id__c": "INV-10002",
+      "Customer_Name__c": "Global Media",
+      "Amount__c": 950.0,
+      "Status__c": "Draft",
+      "Invoice_Date__c": "2026-02-19"
+    }
+  ]
+}
+```
+
+**Response body**
+```json
+[
+  {
+    "id": "a0Bxx0000008AAA",
+    "success": true,
+    "errors": []
+  },
+  {
+    "id": "a0Bxx0000008AAC",
+    "success": true,
+    "errors": []
+  }
+]
+```
+
+### Partial Success Behavior
+
+When `allOrNone=true`:
+- Any single record error causes rollback of all records in the request.
+
+Representative response (`allOrNone=true`, one row invalid):
+
+```json
+[
+  {
+    "id": null,
+    "success": false,
+    "errors": [
+      {
+        "statusCode": "REQUIRED_FIELD_MISSING",
+        "message": "Required fields are missing: [Customer_Name__c]",
+        "fields": [
+          "Customer_Name__c"
+        ]
+      }
+    ]
+  },
+  {
+    "id": null,
+    "success": false,
+    "errors": [
+      {
+        "statusCode": "ALL_OR_NONE_OPERATION_ROLLED_BACK",
+        "message": "Record rolled back because allOrNone is true and at least one record failed.",
+        "fields": []
+      }
+    ]
+  }
+]
+```
+
+When `allOrNone=false`:
+- Each record succeeds or fails independently.
+
+Representative response (`allOrNone=false`, mixed outcome):
+
+```json
+[
+  {
+    "id": "a0Bxx0000008AAD",
+    "success": true,
+    "errors": []
+  },
+  {
+    "id": null,
+    "success": false,
+    "errors": [
+      {
+        "statusCode": "REQUIRED_FIELD_MISSING",
+        "message": "Required fields are missing: [Customer_Name__c]",
+        "fields": [
+          "Customer_Name__c"
+        ]
+      }
+    ]
+  }
+]
+```
+
+### Limits and Chunking
+
+- Maximum records per `composite/sobjects` request: `200`.
+- For larger batches, split input into chunks of 200 records or fewer.
+- Preserve `allOrNone` intent per chunk to maintain predictable rollback behavior.
+
+---
+
+<!-- EXPANDED -->
+## 12) Named Credentials
+
+Named Credentials store external endpoint/auth configuration for callouts used by Flow, Apex, and related platform features.
+
+Metadata type:
+- `NamedCredential`
+
+Deploy path:
+- `namedCredentials/{Name}.namedCredential-meta.xml`
+
+### Metadata XML (Named Principal + OAuth2)
+
+`namedCredentials/External_Billing_API.namedCredential-meta.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<NamedCredential xmlns="http://soap.sforce.com/2006/04/metadata">
+  <allowMergeFieldsInBody>false</allowMergeFieldsInBody>
+  <allowMergeFieldsInHeader>false</allowMergeFieldsInHeader>
+  <authProvider>External_Billing_AuthProvider</authProvider>
+  <authenticationProtocol>OAuth 2.0</authenticationProtocol>
+  <calloutStatus>Enabled</calloutStatus>
+  <generateAuthorizationHeader>true</generateAuthorizationHeader>
+  <label>External Billing API</label>
+  <namedCredentialType>NamedPrincipal</namedCredentialType>
+  <oauthTokenEndpointUrl>https://api.example.com/oauth/token</oauthTokenEndpointUrl>
+  <principalType>NamedUser</principalType>
+  <protocol>HTTPS</protocol>
+  <url>https://api.example.com</url>
+  <username>integration.user@example.com</username>
+</NamedCredential>
+```
+
+### Metadata XML (Per-User + Password Authentication)
+
+`namedCredentials/External_Service_Per_User.namedCredential-meta.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<NamedCredential xmlns="http://soap.sforce.com/2006/04/metadata">
+  <allowMergeFieldsInBody>false</allowMergeFieldsInBody>
+  <allowMergeFieldsInHeader>true</allowMergeFieldsInHeader>
+  <authenticationProtocol>Password</authenticationProtocol>
+  <calloutStatus>Enabled</calloutStatus>
+  <generateAuthorizationHeader>true</generateAuthorizationHeader>
+  <label>External Service Per User</label>
+  <namedCredentialType>PerUser</namedCredentialType>
+  <password>{encrypted_or_secret_placeholder}</password>
+  <protocol>HTTPS</protocol>
+  <url>https://service.example.com</url>
+  <username>{per_user_username_reference}</username>
+</NamedCredential>
+```
+
+### Flow Reference Pattern
+
+Flow HTTP callout actions reference the named credential endpoint by its logical credential binding.
+
+Representative flow action-call metadata fragment:
+
+```xml
+<actionCalls>
+  <name>Call_External_Billing_API</name>
+  <label>Call External Billing API</label>
+  <actionName>flow.HttpCallout</actionName>
+  <actionType>apex</actionType>
+  <inputParameters>
+    <name>namedCredential</name>
+    <value>
+      <stringValue>External_Billing_API</stringValue>
+    </value>
+  </inputParameters>
+  <inputParameters>
+    <name>method</name>
+    <value>
+      <stringValue>POST</stringValue>
+    </value>
+  </inputParameters>
+  <inputParameters>
+    <name>path</name>
+    <value>
+      <stringValue>/v1/invoices/sync</stringValue>
+    </value>
+  </inputParameters>
+</actionCalls>
+```
+
+### `package.xml` Entry for Named Credentials
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<Package xmlns="http://soap.sforce.com/2006/04/metadata">
+  <types>
+    <members>External_Billing_API</members>
+    <members>External_Service_Per_User</members>
+    <name>NamedCredential</name>
+  </types>
+  <version>{api_version_number_only}</version>
+</Package>
+```
 
 ---
 
