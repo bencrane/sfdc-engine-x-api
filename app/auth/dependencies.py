@@ -110,10 +110,16 @@ async def validate_client_access(
     cid = str(client_id)
     auth.assert_client_access(cid)
 
+    try:
+        db_client_id = UUID(cid) if isinstance(client_id, str) else client_id
+        db_org_id = UUID(auth.org_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Client not found")
+
     row = await pool.fetchrow(
         "SELECT id FROM clients WHERE id = $1 AND org_id = $2 AND is_active = TRUE",
-        UUID(cid) if isinstance(client_id, str) else client_id,
-        UUID(auth.org_id),
+        db_client_id,
+        db_org_id,
     )
     if row is None:
         raise HTTPException(status_code=404, detail="Client not found")
