@@ -1,13 +1,14 @@
+import bcrypt
+from uuid import UUID
+
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException
-from passlib.context import CryptContext
 from pydantic import BaseModel
 
 from app.auth.dependencies import get_current_auth, validate_client_access
 from app.db import get_pool
 
 router = APIRouter(prefix="/api/users", tags=["users"])
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 class UserCreateRequest(BaseModel):
@@ -15,7 +16,7 @@ class UserCreateRequest(BaseModel):
     name: str | None = None
     password: str
     role: str
-    client_id: str | None = None
+    client_id: UUID | None = None
 
 
 class UsersListRequest(BaseModel):
@@ -73,7 +74,7 @@ async def create_user(
     if body.client_id is not None:
         client_id = await validate_client_access(auth, body.client_id, pool=pool)
 
-    password_hash = pwd_context.hash(body.password)
+    password_hash = bcrypt.hashpw(body.password.encode(), bcrypt.gensalt()).decode()
 
     try:
         row = await pool.fetchrow(

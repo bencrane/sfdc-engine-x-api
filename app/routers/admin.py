@@ -1,15 +1,14 @@
 import hmac
 from typing import Literal
+from uuid import UUID
 
+import bcrypt
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from passlib.context import CryptContext
 from pydantic import BaseModel
 
 from app.config import settings
 from app.db import get_pool
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 ValidRole = Literal["org_admin", "company_admin", "company_member"]
 
@@ -30,7 +29,7 @@ class OrganizationResponse(BaseModel):
 
 
 class CreateSuperAdminUserRequest(BaseModel):
-    org_id: str
+    org_id: UUID
     email: str
     name: str | None = None
     password: str
@@ -93,7 +92,7 @@ async def create_organization(body: CreateOrganizationRequest) -> OrganizationRe
 
 @router.post("/users", response_model=SuperAdminUserResponse, dependencies=[Depends(require_super_admin)])
 async def create_super_admin_user(body: CreateSuperAdminUserRequest) -> SuperAdminUserResponse:
-    password_hash = pwd_context.hash(body.password)
+    password_hash = bcrypt.hashpw(body.password.encode(), bcrypt.gensalt()).decode()
     pool = get_pool()
 
     try:
@@ -113,6 +112,8 @@ async def create_super_admin_user(body: CreateSuperAdminUserRequest) -> SuperAdm
         raise HTTPException(status_code=404, detail="Organization not found")
     except asyncpg.UniqueViolationError:
         raise HTTPException(status_code=400, detail="User email already exists in organization")
+    except asyncpg.DataError:
+        raise HTTPException(status_code=400, detail="Invalid input data")
 
     if row is None:
         raise HTTPException(status_code=500, detail="Failed to create user")

@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -13,7 +15,7 @@ class ClientCreateRequest(BaseModel):
 
 
 class ClientGetRequest(BaseModel):
-    id: str
+    id: UUID
 
 
 class ClientsListRequest(BaseModel):

@@ -2,6 +2,8 @@ import hashlib
 import secrets
 from datetime import UTC, datetime, timedelta
 
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
@@ -21,7 +23,7 @@ class TokensListRequest(BaseModel):
 
 
 class TokenRevokeRequest(BaseModel):
-    id: str
+    id: UUID
 
 
 class TokenCreateResponse(BaseModel):

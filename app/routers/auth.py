@@ -1,15 +1,14 @@
 from datetime import UTC, datetime, timedelta
 
+import bcrypt
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from jose import jwt
-from passlib.context import CryptContext
 from pydantic import BaseModel
 
 from app.auth.dependencies import get_current_auth
 from app.config import settings
 from app.db import get_pool
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -53,7 +52,7 @@ async def login(body: LoginRequest) -> LoginResponse:
     )
     if row is None or not row["password_hash"]:
         raise invalid_credentials
-    if not pwd_context.verify(body.password, row["password_hash"]):
+    if not bcrypt.checkpw(body.password.encode(), row["password_hash"].encode()):
         raise invalid_credentials
 
     now = datetime.now(UTC)
