@@ -36,16 +36,29 @@ def _extract_bearer_token(request: Request) -> str:
 
 def _try_jwt(token: str) -> AuthContext | None:
     try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+        payload = jwt.decode(
+            token,
+            settings.jwt_secret,
+            algorithms=["HS256"],
+            options={"require": ["exp"]},
+        )
     except JWTError:
         return None
 
-    role = payload.get("role", "")
+    org_id = payload.get("org_id")
+    user_id = payload.get("user_id")
+    role = payload.get("role")
+
+    if not org_id or not user_id or not role:
+        return None
+    if role not in ROLE_PERMISSIONS:
+        return None
+
     return AuthContext(
-        org_id=payload["org_id"],
-        user_id=payload["user_id"],
+        org_id=org_id,
+        user_id=user_id,
         role=role,
-        permissions=ROLE_PERMISSIONS.get(role, []),
+        permissions=ROLE_PERMISSIONS[role],
         client_id=payload.get("client_id"),
         auth_method="session",
     )
