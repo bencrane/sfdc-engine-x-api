@@ -6,17 +6,17 @@ Non-negotiable build rules. Every agent working in this repo must follow these.
 
 ## 1. Service Layer Boundary
 
-All Salesforce API calls go through `app/services/salesforce.py`. No router imports `httpx`. No router calls Salesforce directly. The service layer handles token refresh, rate limits, error translation, and instance URL resolution.
+All Salesforce API calls go through `app/services/salesforce.py`. All Nango API calls go through `app/services/token_manager.py`. No router imports `httpx`. No router calls Salesforce or Nango directly.
 
-**Why:** One place to debug Salesforce issues. One place to handle token expiry. One place to add rate limit retry logic.
+**Why:** One place to debug external API issues. One place to handle token refresh. One place to add rate limit retry logic.
 
 ---
 
 ## 2. Every Query Filters by org_id
 
-No exceptions. SELECT, UPDATE, DELETE — all include `.eq("org_id", auth.org_id)`. INSERT operations set `org_id` from `AuthContext`, never from request body.
+No exceptions. SELECT, UPDATE, DELETE — all include `WHERE org_id = $N`. INSERT operations set `org_id` from `AuthContext`, never from request body (exception: super-admin endpoints which accept `org_id` explicitly).
 
-Client-level operations additionally filter by `client_id` and validate the client belongs to the org.
+Client-level operations additionally filter by `client_id` and validate the client belongs to the org via `validate_client_access`.
 
 **Why:** A query without tenant scoping is a data breach.
 
@@ -24,9 +24,9 @@ Client-level operations additionally filter by `client_id` and validate the clie
 
 ## 3. Tokens Never Leave the Service Layer
 
-OAuth access tokens, refresh tokens, and Salesforce credentials are never returned in API responses. They are never logged. They are never included in error messages.
+OAuth access tokens exist only in memory within `token_manager.py` and `salesforce.py` for the duration of a single API call. They are never stored in our database, never returned in API responses, never logged, never included in error messages.
 
-The `crm_connections` endpoint returns status, instance URL, and last-used timestamp — not tokens.
+Nango holds all OAuth credentials. Our `crm_connections` table stores metadata only: status, instance_url, nango_connection_id.
 
 **Why:** Tokens are the keys to client Salesforce orgs. Leaking one is a security incident.
 
@@ -106,8 +106,24 @@ Use `is_active = FALSE` or `deleted_at` timestamps. Never hard-delete tenant dat
 
 ## 13. Topology Before Deploy
 
-The conflict check endpoint (`POST /api/conflicts/{client_id}/check`) should always be called before deploying. The deploy endpoint accepts an optional `conflict_report_id` linking the deployment to a prior check.
+The conflict check endpoint (`POST /api/conflicts/check`) should always be called before deploying. The deploy endpoint accepts an optional `conflict_report_id` linking the deployment to a prior check. A database trigger enforces that the conflict report belongs to the same org.
 
 This is a convention, not an enforcement — the deploy endpoint does not block without a conflict check. But directives should always include the check step.
 
 **Why:** Deploying blind into a client's Salesforce at $25K/year is unacceptable risk.
+
+---
+
+## 14. UUID Validation at the API Boundary
+
+All ID fields in Pydantic request models use the `UUID` type, not `str`. This ensures invalid or empty UUIDs are caught as 422 validation errors before reaching the database. Never pass unvalidated string IDs to asyncpg queries.
+
+**Why:** Learned the hard way — empty or malformed UUID strings cause asyncpg DataError (500) instead of a clean client error.
+
+---
+
+## 15. No Abandoned Dependencies
+
+Do not use abandoned libraries. If a dependency hasn't been maintained in 2+ years, use the underlying library directly. Example: use `bcrypt` directly instead of `passlib` (abandoned 2020, incompatible with bcrypt 5.x).
+
+**Why:** Abandoned dependencies cause runtime compatibility failures that are hard to diagnose.

@@ -10,11 +10,15 @@ A multi-tenant API service for programmatic Salesforce administration. Organizat
 
 | Layer | Choice | Why |
 |-------|--------|-----|
-| API Framework | FastAPI | Async, Pydantic models, dependency injection for AuthContext |
-| Deployment | Railway | Direct deploy, SSL, custom domain |
-| Database | Supabase (Postgres) | Managed Postgres, row-level isolation |
-| Auth | API tokens + JWT | Machine-to-machine (tokens) and user sessions (JWT) |
-| External API | Salesforce REST + Tooling + Metadata APIs | All CRM operations |
+| API Framework | FastAPI (Python 3.13) | Async, Pydantic models, dependency injection for AuthContext |
+| Deployment | Railway (Dockerfile) | Docker build, SSL, auto-deploy on push to main |
+| Database | Supabase Postgres via asyncpg | Direct async connection pool, no ORM overhead |
+| Secrets | Doppler | Centralized secrets management, injected at runtime |
+| Auth | API tokens (SHA-256 hash) + JWT (HS256) | Machine-to-machine (tokens) and user sessions (JWT) |
+| OAuth | Nango | Manages Salesforce OAuth flow, token storage, automatic refresh |
+| Password Hashing | bcrypt (direct) | No passlib — direct bcrypt library |
+| HTTP Client | httpx | Async HTTP for Salesforce and Nango API calls |
+| External API | Salesforce REST + Tooling + Metadata APIs | All CRM operations via stored OAuth tokens in Nango |
 
 ### Why No Modal
 
@@ -67,52 +71,61 @@ Tier 3: User             — Person at the org
 
 ### Query Scoping
 
-Every database query chains down the tenant hierarchy:
+Every database query filters by `org_id` — no exceptions. Client-level resources additionally filter by `client_id` after validating the client belongs to the org.
 
-```python
-# Org-level: "show me all clients in my org"
-.eq("org_id", auth.org_id)
+```sql
+-- Org-level: "show me all clients in my org"
+SELECT * FROM clients WHERE org_id = $1
 
-# Client-level: "show me connection for this client"
-.eq("org_id", auth.org_id).eq("client_id", client_id)
+-- Client-level: "show me connection for this client"
+SELECT * FROM crm_connections WHERE org_id = $1 AND client_id = $2
 ```
-
-Client-level resources validate the client belongs to the org before any operation.
 
 ### Denormalization
 
-Child tables include `org_id` even when they reference a parent that already has it:
+Child tables include `org_id` even when they reference a parent that already has it. This avoids joins for tenant filtering and provides defense in depth.
 
 | Table | Parent | Has own org_id? | Why? |
 |-------|--------|-----------------|------|
 | clients | organizations | Yes | Primary tenant key |
+| users | organizations | Yes | Direct tenant filtering, integrity trigger |
 | crm_connections | clients | Yes | Query efficiency, direct filtering |
 | crm_topology_snapshots | crm_connections | Yes | Can query snapshots directly by org |
 | crm_deployments | crm_connections | Yes | Can query deployments directly by org |
 | crm_conflict_reports | crm_connections | Yes | Can query reports directly by org |
 | crm_push_logs | crm_connections | Yes | Can query push logs directly by org |
+| crm_field_mappings | clients | Yes | Can query mappings directly by org |
 
-Tenant integrity triggers enforce that `client_id` always belongs to `org_id` on insert/update.
+Tenant integrity triggers on all child tables enforce that `client_id` belongs to `org_id` on insert/update — preventing cross-tenant data leaks at the database level.
 
 ---
 
 ## Auth Model
 
-### Two Auth Methods
+### Three Auth Methods
+
+**Super-Admin** (bootstrap only):
+- Bearer token matched against `SUPER_ADMIN_JWT_SECRET` via constant-time comparison (`hmac.compare_digest`)
+- Used only for: org creation, first user creation
+- No JWT, no DB lookup — the shared secret IS the token
 
 **API Tokens** (machine-to-machine):
-- Hashed and stored in `api_tokens` table
-- Looked up on each request → returns org_id, user_id
-- Used by: data-engine-x, Trigger.dev tasks, external integrations
+- SHA-256 hashed and stored in `api_tokens` table
+- Looked up on each request → returns org_id, user_id, role
+- Query enforces both `t.is_active = TRUE` and `u.is_active = TRUE` (token and user must both be active)
+- Used by: data-engine-x, trigger.dev tasks, external integrations
 
 **JWT Sessions** (user login):
-- Issued on login, contains org_id, user_id, role
-- Validated without DB call (signature check only)
+- Issued on login, signed with `JWT_SECRET` (HS256)
+- Contains: `org_id`, `user_id`, `role`, `client_id`, `exp`
+- `exp` claim is required — tokens without expiry are rejected
+- Required claims validated: `org_id`, `user_id`, `role` must all be present
+- Unknown roles (not in ROLE_PERMISSIONS) are rejected
 - Used by: admin frontend, user-facing interfaces
 
 ### AuthContext
 
-Both methods produce the same AuthContext object, injected into every endpoint via FastAPI dependency:
+All three auth methods produce the same AuthContext object, injected into every endpoint via FastAPI dependency:
 
 ```python
 @dataclass
@@ -120,7 +133,7 @@ class AuthContext:
     org_id: str
     user_id: str
     role: str              # org_admin, company_admin, company_member
-    permissions: list[str] # derived from role
+    permissions: list[str] # derived from role via ROLE_PERMISSIONS
     client_id: str | None  # set for company-scoped users
     auth_method: str       # "api_token" or "session"
 ```
@@ -129,8 +142,8 @@ class AuthContext:
 
 | Role | Scope | Can do |
 |------|-------|--------|
-| `org_admin` | Org-wide | Everything — connect, read, deploy, push, manage |
-| `company_admin` | Client-scoped | View connection status, view topology |
+| `org_admin` | Org-wide | Everything — connect, read, deploy, push, manage users/clients |
+| `company_admin` | Client-scoped | View connections, topology, workflows |
 | `company_member` | Client-scoped | Read-only |
 
 ### Permissions
@@ -150,35 +163,29 @@ class AuthContext:
 
 ## Salesforce Integration
 
-### OAuth Flow
+### OAuth Flow (Nango-Managed)
+
+Nango handles the full Salesforce OAuth lifecycle. No tokens are stored in our database.
 
 ```
-1. Org admin clicks "Connect Client's Salesforce"
-2. Browser redirects to Salesforce OAuth URL:
-   https://login.salesforce.com/services/oauth2/authorize
-   ?response_type=code
-   &client_id={SFDC_CLIENT_ID}
-   &redirect_uri={SFDC_REDIRECT_URI}
-   &scope=full+refresh_token
-
-3. Client's Salesforce admin clicks "Allow"
-4. Salesforce redirects to callback URL with auth code
-5. sfdc-engine-x exchanges code for tokens:
-   POST https://login.salesforce.com/services/oauth2/token
-   → access_token, refresh_token, instance_url
-
-6. Tokens stored in crm_connections
-7. Immediate topology pull triggered
+1. Org admin initiates connection for a client
+2. Our API creates a Nango connect session → returns a session token
+3. Frontend uses the session token with Nango's Connect UI
+4. Client's Salesforce admin authorizes in Salesforce
+5. Nango exchanges the auth code for tokens, stores them
+6. Frontend calls our callback endpoint to confirm
+7. We store connection metadata (status, instance_url, sfdc_org_id) — never tokens
 ```
+
+The `client_id` (UUID) is used as the Nango `connectionId`, creating a 1:1 mapping between our clients and Nango connections.
 
 ### Token Lifecycle
 
-- Access tokens expire (~1-2 hours)
-- Refresh tokens persist until explicitly revoked
-- Token manager checks expiry before every Salesforce API call
-- If expired, refreshes automatically using refresh token
-- New access token stored, call proceeds
-- If refresh fails (token revoked), connection status set to `expired`
+Managed entirely by Nango. Our `token_manager.get_valid_token()` calls Nango's `GET /connections/{id}` endpoint, which auto-refreshes the access token if expired and returns a valid one.
+
+- Callers never deal with Salesforce auth — they get a ready-to-use access token
+- If Nango's refresh fails (HTTP 424 — refresh token revoked or exhausted), the connection is marked `expired` in our database
+- Tokens never appear in our database, logs, or API responses
 
 ### Salesforce APIs Used
 
@@ -189,16 +196,24 @@ class AuthContext:
 | Metadata API | Deploy/retrieve complex metadata (custom objects, layouts, workflows) |
 | Composite API (`/composite/sobjects`) | Batch record upserts (up to 200 records per call) |
 
-### Topology Pull — What We Read
+### Service Layer Boundary
 
-1. **All objects:** `GET /sobjects/` — list every standard + custom object
-2. **Per-object describe:** `GET /sobjects/{Object}/describe/` — fields, relationships, picklist values, field types, required fields
-3. **Validation rules:** Tooling API query on `ValidationRule`
-4. **Active Flows:** Tooling API query on `Flow` where Status='Active'
-5. **Workflow rules:** Tooling API query on `WorkflowRule`
-6. **Record types:** Tooling API query on `RecordType`
+All Salesforce API calls go through `app/services/salesforce.py`. All Nango calls go through `app/services/token_manager.py`. No router calls external APIs directly.
 
-Stored as a single JSONB snapshot, versioned per client.
+---
+
+## Topology Pull
+
+Topology pull captures a client's full CRM schema as a versioned snapshot.
+
+### How It Works
+
+1. **List objects** — `GET /sobjects/` returns all standard + custom objects
+2. **Describe each object** — `GET /sobjects/{Object}/describe/` returns fields, relationships, picklist values, field types, required fields
+3. **Concurrent execution** — Object describes run concurrently with `asyncio.Semaphore(10)` to respect Salesforce API limits while maximizing throughput
+4. **Store as snapshot** — Full topology stored as a single JSONB document in `crm_topology_snapshots`, versioned per client
+
+Each snapshot is immutable. Subsequent pulls create new versions. The `/topology/get` endpoint retrieves the latest (or a specific version), and `/topology/history` lists versions without the JSONB payload.
 
 ### Conflict Detection — What We Check
 
@@ -217,21 +232,22 @@ Stored as a single JSONB snapshot, versioned per client.
 
 | Code | Meaning |
 |------|---------|
+| 400 | Invalid request payload |
 | 401 | Missing or invalid auth token |
 | 403 | Valid token but insufficient permissions |
 | 404 | Resource not found or belongs to different org (same response to prevent enumeration) |
-| 400 | Invalid request payload |
-| 502 | Salesforce API error — response includes SFDC error code and message |
+| 422 | Invalid request format — Pydantic validation (e.g., malformed UUID) |
+| 502 | Salesforce or Nango API error — response includes original error code and message |
 
-Salesforce-specific errors (rate limits, invalid field, etc.) are wrapped in 502 with structured error details so the caller can handle them appropriately.
+Salesforce-specific errors (rate limits, invalid field, etc.) are wrapped in 502 with structured error details so the caller can handle them appropriately. Nango refresh exhaustion (424 from Nango) results in the connection being marked expired.
 
 ---
 
 ## Key Principles
 
 1. **sfdc-engine-x never decides business logic.** It executes what the org tells it to.
-2. **One Salesforce connected app, unlimited client connections.** App credentials are env vars. Per-client tokens are in the database.
-3. **Tokens are managed automatically.** Callers never deal with Salesforce auth.
+2. **One Salesforce connected app, unlimited client connections.** Per-client OAuth managed by Nango.
+3. **Tokens are managed by Nango.** Access tokens are refreshed transparently. They never touch our database, logs, or API responses.
 4. **Everything is logged.** Every deployment, push, topology pull — recorded with timestamps, org_id, client_id.
 5. **Clean up is first-class.** Deployments can be rolled back. Objects, fields, workflows — all removable.
-6. **No Salesforce knowledge leaks.** Callers interact with sfdc-engine-x endpoints. They never need to know Salesforce API specifics.
+6. **Service layer boundary.** All Salesforce API calls go through `app/services/salesforce.py`. All Nango calls go through `app/services/token_manager.py`. No router calls external APIs directly.

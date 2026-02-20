@@ -1,6 +1,118 @@
 # API Reference — sfdc-engine-x
 
-All endpoints use POST unless noted. All require authentication via Bearer token (API token or JWT).
+All endpoints use POST unless noted. All require authentication via Bearer token (API token or JWT) unless noted.
+
+**Auth methods:**
+
+| Method | Header | Usage |
+|--------|--------|-------|
+| Super-Admin | `Authorization: Bearer <SUPER_ADMIN_JWT_SECRET>` | Bootstrap only — org and first user creation |
+| API Token | `Authorization: Bearer <raw_token>` | Machine-to-machine — SHA-256 hashed and looked up per request |
+| JWT Session | `Authorization: Bearer <jwt>` | User login sessions — HS256 signed, contains org_id/user_id/role |
+
+**Common error codes:**
+
+| Code | Meaning |
+|------|---------|
+| 401 | Missing or invalid auth token |
+| 403 | Valid token but insufficient permissions |
+| 404 | Resource not found or belongs to different org |
+| 400 | Invalid request payload |
+| 422 | Invalid request format (Pydantic validation, e.g., bad UUID) |
+| 502 | Salesforce or Nango API error |
+
+---
+
+## Super-Admin
+
+Bootstrap endpoints for creating organizations and initial users. Authenticated via the `SUPER_ADMIN_JWT_SECRET` shared secret (constant-time comparison).
+
+### POST /api/super-admin/orgs
+
+Create a new organization (tenant).
+
+**Auth:** Super-Admin bearer token
+**Permission:** N/A (super-admin only)
+
+**Request:**
+```json
+{
+  "name": "Revenue Activation",
+  "slug": "revenue-activation"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | yes | Display name of the organization |
+| `slug` | string | yes | URL-safe unique identifier |
+
+**Response (200):**
+```json
+{
+  "id": "uuid",
+  "name": "Revenue Activation",
+  "slug": "revenue-activation",
+  "is_active": true,
+  "created_at": "2026-02-19T00:00:00+00:00"
+}
+```
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 400 | `Organization slug already exists` |
+| 401 | `Invalid super-admin token` |
+
+---
+
+### POST /api/super-admin/users
+
+Create a user in any organization (used for bootstrapping the first org_admin).
+
+**Auth:** Super-Admin bearer token
+**Permission:** N/A (super-admin only)
+
+**Request:**
+```json
+{
+  "org_id": "uuid",
+  "email": "admin@revenueactivation.com",
+  "name": "Jane Admin",
+  "password": "...",
+  "role": "org_admin"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `org_id` | UUID | yes | Organization to create the user in |
+| `email` | string | yes | User email (unique per org) |
+| `name` | string | no | Display name |
+| `password` | string | yes | Plain-text password (hashed with bcrypt before storage) |
+| `role` | string | yes | One of: `org_admin`, `company_admin`, `company_member` |
+
+**Response (200):**
+```json
+{
+  "id": "uuid",
+  "org_id": "uuid",
+  "email": "admin@revenueactivation.com",
+  "name": "Jane Admin",
+  "role": "org_admin",
+  "created_at": "2026-02-19T00:00:00+00:00"
+}
+```
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 400 | `User email already exists in organization` |
+| 400 | `Invalid input data` |
+| 401 | `Invalid super-admin token` |
+| 404 | `Organization not found` |
 
 ---
 
@@ -8,7 +120,10 @@ All endpoints use POST unless noted. All require authentication via Bearer token
 
 ### POST /api/auth/login
 
-Issue a JWT session token.
+Issue a JWT session token. No authentication required.
+
+**Auth:** None
+**Permission:** None
 
 **Request:**
 ```json
@@ -18,7 +133,12 @@ Issue a JWT session token.
 }
 ```
 
-**Response:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `email` | string | yes | User email |
+| `password` | string | yes | Plain-text password |
+
+**Response (200):**
 ```json
 {
   "access_token": "eyJ...",
@@ -27,77 +147,141 @@ Issue a JWT session token.
 }
 ```
 
+| Field | Type | Description |
+|-------|------|-------------|
+| `access_token` | string | HS256 JWT containing `org_id`, `user_id`, `role`, `client_id`, `exp` |
+| `token_type` | string | Always `"bearer"` |
+| `expires_in` | integer | Token lifetime in seconds (default 86400 = 24h) |
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 401 | `Invalid credentials` |
+
+---
+
 ### GET /api/auth/me
 
-Return current auth context.
+Return the current auth context for the authenticated caller.
 
-**Response:**
+**Auth:** API Token or JWT Session
+**Permission:** None (any authenticated user)
+
+**Response (200):**
 ```json
 {
   "org_id": "uuid",
   "user_id": "uuid",
   "role": "org_admin",
-  "permissions": ["connections.read", "connections.write", "topology.read", "deploy.write", "push.write", "workflows.read", "workflows.write", "org.manage"],
+  "permissions": [
+    "connections.read",
+    "connections.write",
+    "topology.read",
+    "deploy.write",
+    "push.write",
+    "workflows.read",
+    "workflows.write",
+    "org.manage"
+  ],
   "client_id": null,
   "auth_method": "session"
 }
 ```
 
+| Field | Type | Description |
+|-------|------|-------------|
+| `org_id` | string | Organization UUID |
+| `user_id` | string | User UUID |
+| `role` | string | `org_admin`, `company_admin`, or `company_member` |
+| `permissions` | string[] | Derived from role via ROLE_PERMISSIONS |
+| `client_id` | string \| null | Set for company-scoped users |
+| `auth_method` | string | `"api_token"` or `"session"` |
+
 ---
 
-## Connections
+## Clients
 
-### POST /api/connections/create
+### POST /api/clients/create
 
-Exchange OAuth authorization code for tokens and store the connection.
+Create a new client for the authenticated org.
+
+**Auth:** API Token or JWT Session
+**Permission:** `org.manage`
 
 **Request:**
 ```json
 {
-  "client_id": "uuid",
-  "authorization_code": "abc123xyz"
+  "name": "Acme Corp",
+  "domain": "acme.com"
 }
 ```
 
-**Response:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | yes | Client display name |
+| `domain` | string | no | Client domain |
+
+**Response (200):**
 ```json
 {
   "id": "uuid",
-  "client_id": "uuid",
-  "status": "connected",
-  "instance_url": "https://acme.my.salesforce.com",
-  "sfdc_org_id": "00D...",
-  "created_at": "2026-02-19T..."
+  "name": "Acme Corp",
+  "domain": "acme.com",
+  "is_active": true,
+  "created_at": "2026-02-19T00:00:00+00:00"
 }
 ```
 
-### POST /api/connections/list
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+
+---
+
+### POST /api/clients/list
+
+List all active clients for the authenticated org.
+
+**Auth:** API Token or JWT Session
+**Permission:** `org.manage`
 
 **Request:**
 ```json
-{
-  "client_id": "uuid (optional — omit for all connections in org)"
-}
+{}
 ```
 
-**Response:**
+**Response (200):**
 ```json
 {
   "data": [
     {
       "id": "uuid",
-      "client_id": "uuid",
-      "client_name": "Acme Corp",
-      "status": "connected",
-      "instance_url": "https://acme.my.salesforce.com",
-      "last_used_at": "2026-02-19T...",
-      "created_at": "2026-02-19T..."
+      "name": "Acme Corp",
+      "domain": "acme.com",
+      "is_active": true,
+      "created_at": "2026-02-19T00:00:00+00:00"
     }
   ]
 }
 ```
 
-### POST /api/connections/get
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+
+---
+
+### POST /api/clients/get
+
+Get details for a specific client.
+
+**Auth:** API Token or JWT Session
+**Permission:** `org.manage`
 
 **Request:**
 ```json
@@ -106,7 +290,393 @@ Exchange OAuth authorization code for tokens and store the connection.
 }
 ```
 
-**Response:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | UUID | yes | Client UUID |
+
+**Response (200):**
+```json
+{
+  "id": "uuid",
+  "name": "Acme Corp",
+  "domain": "acme.com",
+  "is_active": true,
+  "created_at": "2026-02-19T00:00:00+00:00",
+  "updated_at": "2026-02-19T00:00:00+00:00"
+}
+```
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` |
+
+---
+
+## Users
+
+### POST /api/users/create
+
+Create a new user in the authenticated org.
+
+**Auth:** API Token or JWT Session
+**Permission:** `org.manage`
+
+**Request:**
+```json
+{
+  "email": "user@acme.com",
+  "name": "John Doe",
+  "password": "...",
+  "role": "company_admin",
+  "client_id": "uuid"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `email` | string | yes | User email (unique per org) |
+| `name` | string | no | Display name |
+| `password` | string | yes | Plain-text password (hashed with bcrypt) |
+| `role` | string | yes | One of: `org_admin`, `company_admin`, `company_member` |
+| `client_id` | UUID | no | Required for `company_admin` and `company_member`; must be null for `org_admin` |
+
+**Scope rules:**
+- `org_admin` — `client_id` must be null (org-wide access)
+- `company_admin` — `client_id` is required
+- `company_member` — `client_id` is required
+
+**Response (200):**
+```json
+{
+  "id": "uuid",
+  "org_id": "uuid",
+  "email": "user@acme.com",
+  "name": "John Doe",
+  "role": "company_admin",
+  "client_id": "uuid",
+  "created_at": "2026-02-19T00:00:00+00:00"
+}
+```
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 400 | `org_admin users cannot have client_id` |
+| 400 | `company_admin users must include client_id` |
+| 400 | `company_member users must include client_id` |
+| 400 | `Invalid role` |
+| 400 | `User email already exists in organization` |
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` (client_id doesn't belong to org) |
+
+---
+
+### POST /api/users/list
+
+List all active users in the authenticated org.
+
+**Auth:** API Token or JWT Session
+**Permission:** `org.manage`
+
+**Request:**
+```json
+{}
+```
+
+**Response (200):**
+```json
+{
+  "data": [
+    {
+      "id": "uuid",
+      "email": "admin@revenueactivation.com",
+      "name": "Jane Admin",
+      "role": "org_admin",
+      "client_id": null,
+      "is_active": true,
+      "created_at": "2026-02-19T00:00:00+00:00"
+    }
+  ]
+}
+```
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+
+---
+
+## Tokens
+
+### POST /api/tokens/create
+
+Create a new API token. The raw token value is returned **once** in this response and never again.
+
+**Auth:** API Token or JWT Session
+**Permission:** `org.manage`
+
+**Request:**
+```json
+{
+  "label": "data-engine-x production",
+  "expires_in_days": 90
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `label` | string | no | Human-readable label for the token |
+| `expires_in_days` | integer | no | Days until expiry (minimum 1). Null = never expires |
+
+**Response (200):**
+```json
+{
+  "id": "uuid",
+  "token": "raw-token-value-returned-once",
+  "label": "data-engine-x production",
+  "expires_at": "2026-05-20T00:00:00+00:00",
+  "created_at": "2026-02-19T00:00:00+00:00"
+}
+```
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+| 422 | Validation error (e.g., `expires_in_days` < 1) |
+
+---
+
+### POST /api/tokens/list
+
+List all active API tokens for the authenticated org. Token values are never exposed.
+
+**Auth:** API Token or JWT Session
+**Permission:** `org.manage`
+
+**Request:**
+```json
+{}
+```
+
+**Response (200):**
+```json
+{
+  "data": [
+    {
+      "id": "uuid",
+      "label": "data-engine-x production",
+      "last_used_at": "2026-02-19T00:00:00+00:00",
+      "expires_at": "2026-05-20T00:00:00+00:00",
+      "is_active": true,
+      "created_at": "2026-02-19T00:00:00+00:00"
+    }
+  ]
+}
+```
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+
+---
+
+### POST /api/tokens/revoke
+
+Soft-deactivate an API token (sets `is_active = false`).
+
+**Auth:** API Token or JWT Session
+**Permission:** `org.manage`
+
+**Request:**
+```json
+{
+  "id": "uuid"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | UUID | yes | Token UUID to revoke |
+
+**Response (200):**
+```json
+{
+  "id": "uuid",
+  "is_active": false
+}
+```
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+| 404 | `API token not found` |
+
+---
+
+## Connections
+
+### POST /api/connections/create
+
+Initiate an OAuth connection for a client via Nango. Returns a Nango connect session token for the frontend to use with Nango's Connect UI.
+
+**Auth:** API Token or JWT Session
+**Permission:** `connections.write`
+
+**Request:**
+```json
+{
+  "client_id": "uuid"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `client_id` | UUID | yes | Client to connect |
+
+**Response (200):**
+```json
+{
+  "id": "uuid",
+  "client_id": "uuid",
+  "status": "pending",
+  "connect_session": {
+    "token": "nango-session-token",
+    "expires_at": "2026-02-19T01:00:00+00:00"
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | CRM connection UUID |
+| `client_id` | string | Client UUID |
+| `status` | string | Always `"pending"` on create |
+| `connect_session.token` | string | Token for Nango Connect UI |
+| `connect_session.expires_at` | string \| null | Session expiry |
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` |
+| 502 | `Nango connect session missing token` |
+
+---
+
+### POST /api/connections/callback
+
+Confirm a connection after OAuth completes. Fetches credentials from Nango and updates connection metadata (instance_url, sfdc_org_id, sfdc_user_id).
+
+**Auth:** API Token or JWT Session
+**Permission:** `connections.write`
+
+**Request:**
+```json
+{
+  "client_id": "uuid"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `client_id` | UUID | yes | Client whose OAuth flow completed |
+
+**Response (200):**
+```json
+{
+  "id": "uuid",
+  "client_id": "uuid",
+  "status": "connected",
+  "instance_url": "https://acme.my.salesforce.com"
+}
+```
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` |
+| 404 | `Connection not found` |
+| 502 | Nango API error |
+
+---
+
+### POST /api/connections/list
+
+List connections for the org, optionally filtered to a specific client.
+
+**Auth:** API Token or JWT Session
+**Permission:** `connections.read`
+
+**Request:**
+```json
+{
+  "client_id": "uuid (optional — omit for all connections in org)"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `client_id` | UUID | no | Filter to a specific client. Omit or null for all connections |
+
+**Response (200):**
+```json
+{
+  "data": [
+    {
+      "id": "uuid",
+      "client_id": "uuid",
+      "status": "connected",
+      "instance_url": "https://acme.my.salesforce.com",
+      "last_used_at": "2026-02-19T00:00:00+00:00",
+      "created_at": "2026-02-19T00:00:00+00:00"
+    }
+  ]
+}
+```
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` (when client_id provided but not in org) |
+
+---
+
+### POST /api/connections/get
+
+Get full details for a specific connection.
+
+**Auth:** API Token or JWT Session
+**Permission:** `connections.read`
+
+**Request:**
+```json
+{
+  "id": "uuid"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | UUID | yes | Connection UUID |
+
+**Response (200):**
 ```json
 {
   "id": "uuid",
@@ -115,16 +685,26 @@ Exchange OAuth authorization code for tokens and store the connection.
   "instance_url": "https://acme.my.salesforce.com",
   "sfdc_org_id": "00D...",
   "sfdc_user_id": "005...",
-  "scopes": "full refresh_token",
-  "last_refreshed_at": "2026-02-19T...",
-  "last_used_at": "2026-02-19T...",
-  "created_at": "2026-02-19T..."
+  "last_used_at": "2026-02-19T00:00:00+00:00",
+  "created_at": "2026-02-19T00:00:00+00:00"
 }
 ```
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+| 404 | `Connection not found` |
+
+---
 
 ### POST /api/connections/refresh
 
-Force a token refresh.
+Force a token refresh via Nango. If Nango reports the token is expired/invalid, the connection status is updated to `expired`.
+
+**Auth:** API Token or JWT Session
+**Permission:** `connections.write`
 
 **Request:**
 ```json
@@ -133,17 +713,35 @@ Force a token refresh.
 }
 ```
 
-**Response:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `client_id` | UUID | yes | Client whose token to refresh |
+
+**Response (200):**
 ```json
 {
   "status": "connected",
-  "last_refreshed_at": "2026-02-19T..."
+  "last_refreshed_at": "2026-02-19T00:00:00+00:00"
 }
 ```
 
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` |
+| 404 | `Connection not found` |
+| 424 | Nango refresh failed (connection marked as `expired`) |
+
+---
+
 ### POST /api/connections/revoke
 
-Disconnect a client's Salesforce. Revokes refresh token with Salesforce.
+Disconnect a client's Salesforce. Deletes the connection in Nango and marks the local record as revoked.
+
+**Auth:** API Token or JWT Session
+**Permission:** `connections.write`
 
 **Request:**
 ```json
@@ -152,12 +750,24 @@ Disconnect a client's Salesforce. Revokes refresh token with Salesforce.
 }
 ```
 
-**Response:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `client_id` | UUID | yes | Client to disconnect |
+
+**Response (200):**
 ```json
 {
   "status": "revoked"
 }
 ```
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` |
+| 404 | `Connection not found` |
 
 ---
 
@@ -165,7 +775,10 @@ Disconnect a client's Salesforce. Revokes refresh token with Salesforce.
 
 ### POST /api/topology/pull
 
-Pull and store the client's full CRM schema.
+Pull the client's full CRM schema from Salesforce and store as a versioned snapshot.
+
+**Auth:** API Token or JWT Session
+**Permissions:** `topology.read` + `connections.write`
 
 **Request:**
 ```json
@@ -174,7 +787,11 @@ Pull and store the client's full CRM schema.
 }
 ```
 
-**Response:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `client_id` | UUID | yes | Client whose Salesforce to pull |
+
+**Response (200):**
 ```json
 {
   "id": "uuid",
@@ -182,23 +799,51 @@ Pull and store the client's full CRM schema.
   "version": 3,
   "objects_count": 847,
   "custom_objects_count": 12,
-  "pulled_at": "2026-02-19T..."
+  "pulled_at": "2026-02-19T00:00:00+00:00"
 }
 ```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Snapshot UUID |
+| `client_id` | string | Client UUID |
+| `version` | integer | Auto-incrementing version per client |
+| `objects_count` | integer | Total number of Salesforce objects |
+| `custom_objects_count` | integer | Number of custom objects |
+| `pulled_at` | string | ISO timestamp |
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 400 | `No connected Salesforce connection found` |
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` |
+| 502 | Salesforce API error |
+
+---
 
 ### POST /api/topology/get
 
-Retrieve the latest stored snapshot.
+Retrieve a stored topology snapshot (latest or specific version).
+
+**Auth:** API Token or JWT Session
+**Permission:** `topology.read`
 
 **Request:**
 ```json
 {
   "client_id": "uuid",
-  "version": "integer (optional — omit for latest)"
+  "version": 3
 }
 ```
 
-**Response:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `client_id` | UUID | yes | Client UUID |
+| `version` | integer | no | Specific version number. Omit for latest |
+
+**Response (200):**
 ```json
 {
   "id": "uuid",
@@ -206,14 +851,31 @@ Retrieve the latest stored snapshot.
   "version": 3,
   "objects_count": 847,
   "custom_objects_count": 12,
-  "snapshot": { ... },
-  "pulled_at": "2026-02-19T..."
+  "snapshot": { "...full JSONB topology..." },
+  "pulled_at": "2026-02-19T00:00:00+00:00"
 }
 ```
 
+| Field | Type | Description |
+|-------|------|-------------|
+| `snapshot` | object | Full CRM topology — objects, fields, relationships, picklists |
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` |
+| 404 | `Topology snapshot not found` |
+
+---
+
 ### POST /api/topology/history
 
-List snapshot versions for a client.
+List all snapshot versions for a client (without the JSONB snapshot payload).
+
+**Auth:** API Token or JWT Session
+**Permission:** `topology.read`
 
 **Request:**
 ```json
@@ -222,24 +884,76 @@ List snapshot versions for a client.
 }
 ```
 
-**Response:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `client_id` | UUID | yes | Client UUID |
+
+**Response (200):**
 ```json
 {
   "data": [
-    { "id": "uuid", "version": 3, "objects_count": 847, "custom_objects_count": 12, "pulled_at": "2026-02-19T..." },
-    { "id": "uuid", "version": 2, "objects_count": 840, "custom_objects_count": 11, "pulled_at": "2026-02-01T..." },
-    { "id": "uuid", "version": 1, "objects_count": 835, "custom_objects_count": 10, "pulled_at": "2026-01-15T..." }
+    {
+      "id": "uuid",
+      "version": 3,
+      "objects_count": 847,
+      "custom_objects_count": 12,
+      "pulled_at": "2026-02-19T00:00:00+00:00"
+    },
+    {
+      "id": "uuid",
+      "version": 2,
+      "objects_count": 840,
+      "custom_objects_count": 11,
+      "pulled_at": "2026-02-01T00:00:00+00:00"
+    }
   ]
+}
+```
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` |
+
+---
+
+## Health
+
+### GET /health
+
+Health check endpoint. No authentication required.
+
+**Auth:** None
+**Permission:** None
+
+**Response (200):**
+```json
+{
+  "status": "ok",
+  "timestamp": "2026-02-19T00:00:00+00:00"
 }
 ```
 
 ---
 
-## Conflicts
+## Not Yet Implemented
 
-### POST /api/conflicts/check
+The following endpoints are planned but not yet built. Specs are provisional and may change during implementation.
+
+---
+
+### Conflicts (Phase 5)
+
+#### POST /api/conflicts/check
+
+> **Status: Not Yet Implemented**
 
 Run pre-deploy conflict analysis.
+
+**Auth:** API Token or JWT Session
+**Permission:** `deploy.write` (expected)
 
 **Request:**
 ```json
@@ -270,7 +984,7 @@ Run pre-deploy conflict analysis.
 }
 ```
 
-**Response:**
+**Response (200):**
 ```json
 {
   "id": "uuid",
@@ -286,7 +1000,11 @@ Run pre-deploy conflict analysis.
 }
 ```
 
-### POST /api/conflicts/get
+#### POST /api/conflicts/get
+
+> **Status: Not Yet Implemented**
+
+Retrieve a specific conflict report.
 
 **Request:**
 ```json
@@ -297,11 +1015,16 @@ Run pre-deploy conflict analysis.
 
 ---
 
-## Deploy
+### Deploy (Phase 5)
 
-### POST /api/deploy/custom-objects
+#### POST /api/deploy/custom-objects
+
+> **Status: Not Yet Implemented**
 
 Create or update custom objects and fields.
+
+**Auth:** API Token or JWT Session
+**Permission:** `deploy.write` (expected)
 
 **Request:**
 ```json
@@ -331,7 +1054,7 @@ Create or update custom objects and fields.
 }
 ```
 
-**Response:**
+**Response (200):**
 ```json
 {
   "id": "uuid",
@@ -346,7 +1069,9 @@ Create or update custom objects and fields.
 }
 ```
 
-### POST /api/deploy/workflows
+#### POST /api/deploy/workflows
+
+> **Status: Not Yet Implemented**
 
 Create or update automations in client's Salesforce.
 
@@ -366,7 +1091,11 @@ Create or update automations in client's Salesforce.
 }
 ```
 
-### POST /api/deploy/status
+#### POST /api/deploy/status
+
+> **Status: Not Yet Implemented**
+
+Check deployment status.
 
 **Request:**
 ```json
@@ -375,7 +1104,9 @@ Create or update automations in client's Salesforce.
 }
 ```
 
-### POST /api/deploy/rollback
+#### POST /api/deploy/rollback
+
+> **Status: Not Yet Implemented**
 
 Remove all objects/fields/workflows from a specific deployment.
 
@@ -386,7 +1117,7 @@ Remove all objects/fields/workflows from a specific deployment.
 }
 ```
 
-**Response:**
+**Response (200):**
 ```json
 {
   "id": "uuid",
@@ -402,11 +1133,16 @@ Remove all objects/fields/workflows from a specific deployment.
 
 ---
 
-## Push
+### Push (Phase 6)
 
-### POST /api/push/records
+#### POST /api/push/records
+
+> **Status: Not Yet Implemented**
 
 Upsert records into client's Salesforce.
+
+**Auth:** API Token or JWT Session
+**Permission:** `push.write` (expected)
 
 **Request:**
 ```json
@@ -429,7 +1165,7 @@ Upsert records into client's Salesforce.
 }
 ```
 
-**Response:**
+**Response (200):**
 ```json
 {
   "id": "uuid",
@@ -441,7 +1177,9 @@ Upsert records into client's Salesforce.
 }
 ```
 
-### POST /api/push/status-update
+#### POST /api/push/status-update
+
+> **Status: Not Yet Implemented**
 
 Update field values on existing records.
 
@@ -460,7 +1198,9 @@ Update field values on existing records.
 }
 ```
 
-### POST /api/push/link
+#### POST /api/push/link
+
+> **Status: Not Yet Implemented**
 
 Create relationships between records.
 
@@ -484,9 +1224,11 @@ Create relationships between records.
 
 ---
 
-## Workflows
+### Workflows (Phase 7)
 
-### POST /api/workflows/list
+#### POST /api/workflows/list
+
+> **Status: Not Yet Implemented**
 
 List active automations in client's Salesforce.
 
@@ -497,13 +1239,15 @@ List active automations in client's Salesforce.
 }
 ```
 
-### POST /api/workflows/deploy
+#### POST /api/workflows/deploy
 
-Create or update automation rules.
+> **Status: Not Yet Implemented**
 
-**Request:** Same as POST /api/deploy/workflows.
+Create or update automation rules. Same request shape as `POST /api/deploy/workflows`.
 
-### POST /api/workflows/remove
+#### POST /api/workflows/remove
+
+> **Status: Not Yet Implemented**
 
 Delete deployed automations.
 
@@ -512,21 +1256,5 @@ Delete deployed automations.
 {
   "client_id": "uuid",
   "workflow_ids": ["uuid", "uuid"]
-}
-```
-
----
-
-## Health
-
-### GET /health
-
-No authentication required.
-
-**Response:**
-```json
-{
-  "status": "ok",
-  "timestamp": "2026-02-19T..."
 }
 ```
