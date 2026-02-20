@@ -2265,6 +2265,385 @@ Representative flow action-call metadata fragment:
 </Package>
 ```
 
+<!-- EXPANDED -->
+### ExternalCredential (Newer Model)
+
+`ExternalCredential` is the newer metadata model that stores authentication configuration separately from endpoint URL configuration.
+
+Relationship model:
+- `ExternalCredential` contains authentication and principal configuration.
+- `NamedCredential` contains endpoint URL/protocol and references an external credential for auth.
+
+This model supports newer auth patterns and is increasingly used in orgs on newer API versions/configurations. Legacy named-credential-only patterns still exist in many orgs.
+
+#### Metadata XML example (`externalCredentials/External_Billing_Auth.externalCredential-meta.xml`)
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<ExternalCredential xmlns="http://soap.sforce.com/2006/04/metadata">
+  <authenticationProtocol>OAuth2ClientCredentials</authenticationProtocol>
+  <label>External Billing Auth</label>
+  <externalCredentialParameters>
+    <parameterName>token_url</parameterName>
+    <parameterType>AuthProviderUrl</parameterType>
+    <parameterValue>https://api.example.com/oauth/token</parameterValue>
+  </externalCredentialParameters>
+  <externalCredentialParameters>
+    <parameterName>scope</parameterName>
+    <parameterType>Scope</parameterType>
+    <parameterValue>billing.write billing.read</parameterValue>
+  </externalCredentialParameters>
+  <principalType>NamedPrincipal</principalType>
+  <principals>
+    <principalName>BillingClientCredentials</principalName>
+    <principalType>NamedPrincipal</principalType>
+    <sequenceNumber>1</sequenceNumber>
+  </principals>
+</ExternalCredential>
+```
+
+#### API key style example (`externalCredentials/External_API_Key_Auth.externalCredential-meta.xml`)
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<ExternalCredential xmlns="http://soap.sforce.com/2006/04/metadata">
+  <authenticationProtocol>Custom</authenticationProtocol>
+  <label>External API Key Auth</label>
+  <externalCredentialParameters>
+    <parameterName>header_name</parameterName>
+    <parameterType>AuthParameter</parameterType>
+    <parameterValue>x-api-key</parameterValue>
+  </externalCredentialParameters>
+  <principalType>NamedPrincipal</principalType>
+  <principals>
+    <principalName>ApiKeyPrincipal</principalName>
+    <principalType>NamedPrincipal</principalType>
+    <sequenceNumber>1</sequenceNumber>
+  </principals>
+</ExternalCredential>
+```
+
+#### Named Credential reference pattern
+
+Representative metadata fragment showing linkage from `NamedCredential` to `ExternalCredential`:
+
+```xml
+<namedCredentialParameters>
+  <externalCredential>External_Billing_Auth</externalCredential>
+  <parameterName>ExternalCredential</parameterName>
+  <parameterType>Authentication</parameterType>
+</namedCredentialParameters>
+```
+
+#### Deployment via Metadata API
+
+`package.xml` entries:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<Package xmlns="http://soap.sforce.com/2006/04/metadata">
+  <types>
+    <members>External_Billing_Auth</members>
+    <members>External_API_Key_Auth</members>
+    <name>ExternalCredential</name>
+  </types>
+  <types>
+    <members>External_Billing_API</members>
+    <name>NamedCredential</name>
+  </types>
+  <version>{api_version_number_only}</version>
+</Package>
+```
+
+Version/configuration note:
+- Metadata shape and required child nodes can vary by API version and org credential architecture (legacy named credential model versus external credential model).
+
+---
+
+<!-- EXPANDED -->
+## 13) Bulk API 2.0 (Ingest)
+
+Bulk API 2.0 ingest is the asynchronous CSV-based interface for high-volume record operations (`insert`, `update`, `upsert`, `delete`, `hardDelete` where enabled).
+
+Rule-of-thumb workload split:
+- Composite API: small synchronous batches, typically under 200 records/request.
+- Bulk API 2.0 ingest: asynchronous processing for 200+ records and strongly preferred for 1,000+ record operations.
+
+Base endpoint:
+- `{instance_url}/services/data/{api_version}/jobs/ingest`
+
+Common headers:
+- `Authorization: Bearer {access_token}`
+- `Accept: application/json`
+
+CSV upload header:
+- `Content-Type: text/csv`
+
+JSON control request header:
+- `Content-Type: application/json`
+
+### Decision Matrix: Composite API vs Bulk API 2.0
+
+| Criteria | Composite API | Bulk API 2.0 |
+|---|---|---|
+| Record count sweet spot | 1-200 per call | 200-150,000,000 |
+| Format | JSON | CSV |
+| Execution | Synchronous | Asynchronous |
+| Per-record errors | Inline in response array | Separate CSV download |
+| allOrNone support | Yes | No (best-effort only) |
+| Use case | Real-time operations, small batches | Daily loads, backfills, migrations |
+
+### Ingest Lifecycle (Upsert Example: 5,000 `Job_Posting__c` by `Posting_URL__c`)
+
+#### Step 1: Create Job
+
+**Method:** `POST`  
+**URL:** `{instance_url}/services/data/{api_version}/jobs/ingest`
+
+**Required headers**
+- `Authorization: Bearer {access_token}`
+- `Content-Type: application/json`
+- `Accept: application/json`
+
+**Request body**
+```json
+{
+  "operation": "upsert",
+  "object": "Job_Posting__c",
+  "externalIdFieldName": "Posting_URL__c",
+  "contentType": "CSV",
+  "lineEnding": "LF",
+  "columnDelimiter": "COMMA"
+}
+```
+
+**Response body**
+```json
+{
+  "id": "750xx00000000AAAQ",
+  "operation": "upsert",
+  "object": "Job_Posting__c",
+  "createdById": "005xx0000001ABC",
+  "createdDate": "2026-02-19T18:12:14.000+0000",
+  "systemModstamp": "2026-02-19T18:12:14.000+0000",
+  "state": "Open",
+  "externalIdFieldName": "Posting_URL__c",
+  "concurrencyMode": "Parallel",
+  "contentType": "CSV",
+  "apiVersion": 61.0,
+  "lineEnding": "LF",
+  "columnDelimiter": "COMMA"
+}
+```
+
+#### Step 2: Upload CSV Data
+
+**Method:** `PUT`  
+**URL:** `{instance_url}/services/data/{api_version}/jobs/ingest/750xx00000000AAAQ/batches`
+
+**Required headers**
+- `Authorization: Bearer {access_token}`
+- `Content-Type: text/csv`
+- `Accept: application/json`
+
+**Request body (CSV)**
+```csv
+Posting_URL__c,Title__c,Company__c,City__c,State__c,Country__c,Posted_Date__c,Is_Active__c
+https://jobs.example.com/postings/1001,Senior AE,Acme Inc,Chicago,IL,US,2026-02-19,true
+https://jobs.example.com/postings/1002,TAM,Acme Inc,Austin,TX,US,2026-02-19,true
+https://jobs.example.com/postings/1003,Recruiter,Global Media,New York,NY,US,2026-02-19,true
+https://jobs.example.com/postings/1004,Account Manager,Global Media,Seattle,WA,US,2026-02-19,true
+https://jobs.example.com/postings/1005,SDR,Blue Orbit,Denver,CO,US,2026-02-19,true
+```
+
+**Response body**
+```json
+{
+  "id": "750xx00000000AAAQ",
+  "state": "Open"
+}
+```
+
+CSV requirements:
+- Header row must use Salesforce field API names.
+- UTF-8 CSV payload, delimiter and line ending must match job config.
+- Maximum upload payload per ingest upload: 150 MB.
+- For datasets larger than one payload, split into multiple jobs (each with its own upload/close cycle).
+
+#### Step 3: Close Job (Start Processing)
+
+**Method:** `PATCH`  
+**URL:** `{instance_url}/services/data/{api_version}/jobs/ingest/750xx00000000AAAQ`
+
+**Required headers**
+- `Authorization: Bearer {access_token}`
+- `Content-Type: application/json`
+- `Accept: application/json`
+
+**Request body**
+```json
+{
+  "state": "UploadComplete"
+}
+```
+
+**Response body**
+```json
+{
+  "id": "750xx00000000AAAQ",
+  "operation": "upsert",
+  "object": "Job_Posting__c",
+  "state": "UploadComplete"
+}
+```
+
+#### Step 4: Poll Job Status
+
+**Method:** `GET`  
+**URL:** `{instance_url}/services/data/{api_version}/jobs/ingest/750xx00000000AAAQ`
+
+**Required headers**
+- `Authorization: Bearer {access_token}`
+- `Accept: application/json`
+
+**Request body**
+```json
+{}
+```
+
+**Response body**
+```json
+{
+  "id": "750xx00000000AAAQ",
+  "operation": "upsert",
+  "object": "Job_Posting__c",
+  "state": "JobComplete",
+  "createdDate": "2026-02-19T18:12:14.000+0000",
+  "systemModstamp": "2026-02-19T18:14:01.000+0000",
+  "numberRecordsProcessed": 5000,
+  "numberRecordsFailed": 37,
+  "retries": 0,
+  "totalProcessingTime": 8543,
+  "apiActiveProcessingTime": 7210,
+  "apexProcessingTime": 1333
+}
+```
+
+Job state values:
+- `Open`
+- `UploadComplete`
+- `InProgress`
+- `JobComplete`
+- `Failed`
+- `Aborted`
+
+#### Step 5: Download Successful Results
+
+**Method:** `GET`  
+**URL:** `{instance_url}/services/data/{api_version}/jobs/ingest/750xx00000000AAAQ/successfulResults`
+
+**Required headers**
+- `Authorization: Bearer {access_token}`
+- `Accept: text/csv`
+
+**Request body**
+```json
+{}
+```
+
+**Response body (CSV)**
+```csv
+sf__Id,sf__Created,Posting_URL__c,Title__c,Company__c,City__c,State__c,Country__c,Posted_Date__c,Is_Active__c
+a1Bxx0000001AAA,false,https://jobs.example.com/postings/1001,Senior AE,Acme Inc,Chicago,IL,US,2026-02-19,true
+a1Bxx0000001AAB,true,https://jobs.example.com/postings/1002,TAM,Acme Inc,Austin,TX,US,2026-02-19,true
+```
+
+Returned success columns typically include:
+- `sf__Id`
+- `sf__Created`
+- Original submitted CSV columns
+
+#### Step 6: Download Failed Results
+
+**Method:** `GET`  
+**URL:** `{instance_url}/services/data/{api_version}/jobs/ingest/750xx00000000AAAQ/failedResults`
+
+**Required headers**
+- `Authorization: Bearer {access_token}`
+- `Accept: text/csv`
+
+**Request body**
+```json
+{}
+```
+
+**Response body (CSV)**
+```csv
+sf__Id,sf__Error,Posting_URL__c,Title__c,Company__c,City__c,State__c,Country__c,Posted_Date__c,Is_Active__c
+,Required fields are missing: [Title__c],https://jobs.example.com/postings/3211,,Acme Inc,Chicago,IL,US,2026-02-19,true
+,Invalid date: 2026/02/19,https://jobs.example.com/postings/4211,Recruiter,Global Media,New York,NY,US,2026/02/19,true
+```
+
+Returned failure columns typically include:
+- `sf__Id` (blank on many failed inserts/upserts)
+- `sf__Error`
+- Original submitted CSV columns
+
+#### Step 7: Download Unprocessed Records
+
+**Method:** `GET`  
+**URL:** `{instance_url}/services/data/{api_version}/jobs/ingest/750xx00000000AAAQ/unprocessedrecords`
+
+**Required headers**
+- `Authorization: Bearer {access_token}`
+- `Accept: text/csv`
+
+**Request body**
+```json
+{}
+```
+
+**Response body (CSV)**
+```csv
+Posting_URL__c,Title__c,Company__c,City__c,State__c,Country__c,Posted_Date__c,Is_Active__c
+https://jobs.example.com/postings/9981,Senior CSM,Acme Inc,Chicago,IL,US,2026-02-19,true
+```
+
+`unprocessedrecords` contains rows that were not attempted (for example job abort/transition timing cases).
+
+### Limits and Quotas
+
+- Ingest upload payload size: maximum 150 MB per upload.
+- Maximum active/open Bulk API 2.0 ingest jobs per org: 15.
+- Bulk API 2.0 internal processing chunks are in 10,000-record units.
+- Bulk API usage contributes to org API entitlement; bulk processing consumption is measured in record chunks/batches by Salesforce limits accounting.
+- For very large loads, split into multiple jobs and process asynchronously.
+
+### Partial Success and Error Handling
+
+Bulk API 2.0 ingest is best-effort; there is no all-or-none transactional mode equivalent to Composite `allOrNone`.
+
+Operational handling:
+1. Poll job until terminal state (`JobComplete`, `Failed`, or `Aborted`).
+2. Always download both `successfulResults` and `failedResults`.
+3. Retry only failed rows after fixing data errors.
+4. Use `unprocessedrecords` to recover rows that were never attempted.
+
+### CSV Formatting Gotchas
+
+- Quote values containing commas, quotes, or line breaks using CSV escaping rules.
+- Use empty field value to represent null when allowed by field metadata and operation semantics.
+- Date fields should use `YYYY-MM-DD`.
+- Datetime fields should use ISO-8601 UTC form (for example `2026-02-19T18:12:14.000Z`).
+- Ensure header names exactly match field API names.
+
+### Query Jobs (`/jobs/query`) for Completeness
+
+Bulk API 2.0 also supports asynchronous query jobs at:
+- `{instance_url}/services/data/{api_version}/jobs/query`
+
+This section focuses on ingest operations; query lifecycle follows create/poll/result-download patterns analogous to ingest job orchestration.
+
 ---
 
 ## Official Documentation Sources Consulted
