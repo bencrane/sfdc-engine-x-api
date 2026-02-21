@@ -32,7 +32,7 @@ async def pull_topology(
 
     connection_row = await pool.fetchrow(
         """
-        SELECT id
+        SELECT id, nango_connection_id
         FROM crm_connections
         WHERE org_id = $1
           AND client_id = $2
@@ -44,7 +44,11 @@ async def pull_topology(
     if connection_row is None:
         raise HTTPException(status_code=400, detail="No connected Salesforce connection found")
 
-    snapshot = await salesforce.pull_full_topology(client_id)
+    nango_connection_id = connection_row["nango_connection_id"]
+    if not nango_connection_id:
+        raise HTTPException(status_code=400, detail="Connection has no Nango connection ID")
+
+    snapshot = await salesforce.pull_full_topology(nango_connection_id)
 
     version = await pool.fetchval(
         """

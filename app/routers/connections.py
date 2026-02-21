@@ -16,6 +16,7 @@ class ConnectionCreateRequest(BaseModel):
 
 class ConnectionCallbackRequest(BaseModel):
     client_id: UUID
+    nango_connection_id: str | None = None
 
 
 class ConnectionListRequest(BaseModel):
@@ -84,6 +85,24 @@ class ConnectionRefreshResponse(BaseModel):
 
 class ConnectionRevokeResponse(BaseModel):
     status: str
+
+
+async def _get_nango_connection_id(pool, org_id: str, client_id: str) -> str:
+    """Look up nango_connection_id from crm_connections. Raises 400 if not found."""
+    row = await pool.fetchrow(
+        """
+        SELECT nango_connection_id
+        FROM crm_connections
+        WHERE org_id = $1
+          AND client_id = $2
+          AND nango_connection_id IS NOT NULL
+        """,
+        org_id,
+        client_id,
+    )
+    if row is None or not row["nango_connection_id"]:
+        raise HTTPException(status_code=400, detail="No Nango connection found for this client")
+    return row["nango_connection_id"]
 
 
 def _extract_identity_ids(raw: dict) -> tuple[str | None, str | None]:
@@ -164,7 +183,12 @@ async def confirm_connection_callback(
     pool = get_pool()
 
     client_id = await validate_client_access(auth, body.client_id, pool=pool)
-    connection = await token_manager.get_connection_credentials(client_id)
+
+    nango_cid = body.nango_connection_id
+    if not nango_cid:
+        nango_cid = await _get_nango_connection_id(pool, auth.org_id, client_id)
+
+    connection = await token_manager.get_connection_credentials(nango_cid)
 
     connection_config = connection.get("connection_config") or {}
     raw = connection.get("raw") or {}
@@ -173,20 +197,21 @@ async def confirm_connection_callback(
 
     row = await pool.fetchrow(
         """
-        UPDATE crm_connections
-        SET status = 'connected'::connection_status,
-            nango_connection_id = $3,
-            instance_url = $4,
-            sfdc_org_id = $5,
-            sfdc_user_id = $6,
+        INSERT INTO crm_connections (org_id, client_id, nango_connection_id, status, instance_url, sfdc_org_id, sfdc_user_id)
+        VALUES ($1, $2, $3, 'connected'::connection_status, $4, $5, $6)
+        ON CONFLICT (org_id, client_id)
+        DO UPDATE SET
+            status = 'connected'::connection_status,
+            nango_connection_id = EXCLUDED.nango_connection_id,
+            instance_url = EXCLUDED.instance_url,
+            sfdc_org_id = EXCLUDED.sfdc_org_id,
+            sfdc_user_id = EXCLUDED.sfdc_user_id,
             error_message = NULL
-        WHERE org_id = $1
-          AND client_id = $2
         RETURNING id, client_id, status::text AS status, instance_url
         """,
         auth.org_id,
         client_id,
-        client_id,
+        nango_cid,
         instance_url,
         sfdc_org_id,
         sfdc_user_id,
@@ -294,8 +319,10 @@ async def refresh_connection(
     pool = get_pool()
 
     client_id = await validate_client_access(auth, body.client_id, pool=pool)
+    nango_cid = await _get_nango_connection_id(pool, auth.org_id, client_id)
+
     try:
-        await token_manager.get_connection_credentials(client_id)
+        await token_manager.get_connection_credentials(nango_cid)
     except HTTPException as exc:
         if exc.status_code == 424:
             await pool.execute(
@@ -314,7 +341,6 @@ async def refresh_connection(
         """
         UPDATE crm_connections
         SET status = 'connected'::connection_status,
-            nango_connection_id = $3,
             last_refreshed_at = NOW(),
             error_message = NULL
         WHERE org_id = $1
@@ -322,7 +348,6 @@ async def refresh_connection(
         RETURNING status::text AS status, last_refreshed_at
         """,
         auth.org_id,
-        client_id,
         client_id,
     )
     if row is None:
@@ -343,7 +368,8 @@ async def revoke_connection(
     pool = get_pool()
 
     client_id = await validate_client_access(auth, body.client_id, pool=pool)
-    await token_manager.delete_connection(client_id)
+    nango_cid = await _get_nango_connection_id(pool, auth.org_id, client_id)
+    await token_manager.delete_connection(nango_cid)
 
     command_status = await pool.execute(
         """

@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     sfdc_api_version: str = "v60.0"
     nango_secret_key: str = ""
     nango_base_url: str = "https://api.nango.dev"
-    nango_provider_config_key: str = "salesforce"
+    nango_provider_config_key: str = "salesforce-revengineer-ecp"
     jwt_expiry_seconds: int = 86400
 
 
