@@ -1,6 +1,6 @@
 from fastapi import HTTPException
 
-from app.services import salesforce
+from app.services import metadata_builder, salesforce
 
 
 def _strip_custom_suffix(api_name: str) -> str:
@@ -119,6 +119,73 @@ def _resolve_deployment_status(total: int, succeeded: int) -> str:
     return "partial"
 
 
+def _as_dict_list(value: object) -> list[dict]:
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    if isinstance(value, dict):
+        return [value]
+    return []
+
+
+def _metadata_status(metadata_result: dict) -> str:
+    deploy_result = metadata_result.get("deployResult")
+    if isinstance(deploy_result, dict):
+        status = deploy_result.get("status")
+        if status:
+            return str(status)
+    status = metadata_result.get("status")
+    return str(status) if status else "Unknown"
+
+
+def _metadata_component_maps(metadata_result: dict) -> tuple[dict[str, dict], dict[str, dict]]:
+    deploy_result = metadata_result.get("deployResult")
+    if not isinstance(deploy_result, dict):
+        return {}, {}
+    details = deploy_result.get("details")
+    if not isinstance(details, dict):
+        return {}, {}
+
+    success_map: dict[str, dict] = {}
+    failure_map: dict[str, dict] = {}
+
+    for component in _as_dict_list(details.get("componentSuccesses")):
+        full_name = str(component.get("fullName") or "").strip()
+        if full_name:
+            success_map[full_name] = component
+
+    for component in _as_dict_list(details.get("componentFailures")):
+        full_name = str(component.get("fullName") or "").strip()
+        if full_name:
+            failure_map[full_name] = component
+
+    return success_map, failure_map
+
+
+def _metadata_failure_to_error(failure: dict) -> dict:
+    code = str(failure.get("problemType") or failure.get("errorCode") or "metadata_deploy_failed")
+    message = str(
+        failure.get("problem")
+        or failure.get("errorMessage")
+        or failure.get("message")
+        or "Metadata deploy failed"
+    )
+    return {"code": code, "message": message}
+
+
+def _metadata_failure_component(
+    component_type: str,
+    api_name: str,
+    detail: object,
+) -> dict:
+    error = _normalize_error(detail if isinstance(detail, dict) else {"message": str(detail)})
+    return {
+        "type": component_type,
+        "api_name": api_name,
+        "success": False,
+        "error": error,
+    }
+
+
 async def execute_deployment(nango_connection_id: str, plan: dict) -> dict:
     components: list[dict] = []
     objects_created = 0
@@ -129,13 +196,12 @@ async def execute_deployment(nango_connection_id: str, plan: dict) -> dict:
     if not isinstance(custom_objects, list):
         custom_objects = []
 
+    metadata_custom_objects: list[dict] = []
     for custom_object in custom_objects:
         if not isinstance(custom_object, dict):
             continue
 
         object_api_name = str(custom_object.get("api_name") or "").strip()
-        object_label = str(custom_object.get("label") or object_api_name)
-        object_plural_label = custom_object.get("plural_label")
         if not object_api_name:
             components.append(
                 {
@@ -150,105 +216,113 @@ async def execute_deployment(nango_connection_id: str, plan: dict) -> dict:
             )
             continue
 
-        object_response = await salesforce.tooling_create_custom_object(
-            nango_connection_id=nango_connection_id,
-            api_name=object_api_name,
-            label=object_label,
-            plural_label=str(object_plural_label) if object_plural_label is not None else None,
-        )
-        object_success = bool(object_response.get("success"))
-        object_component: dict = {
-            "type": "custom_object",
-            "api_name": object_api_name,
-            "success": object_success,
-            "sfdc_id": object_response.get("id"),
-        }
-        if not object_success:
-            object_component["error"] = _extract_tooling_error(object_response)
-        components.append(object_component)
+        metadata_custom_objects.append(custom_object)
 
-        if not object_success:
-            continue
+    if metadata_custom_objects:
+        planned_custom_components: list[tuple[str, str]] = []
+        for custom_object in metadata_custom_objects:
+            object_api_name = str(custom_object.get("api_name") or "").strip()
+            planned_custom_components.append(("custom_object", object_api_name))
 
-        objects_created += 1
-
-        fields = custom_object.get("fields")
-        if isinstance(fields, list):
-            for field in fields:
-                if not isinstance(field, dict):
-                    continue
-                field_api_name = str(field.get("api_name") or "").strip()
-                if not field_api_name:
-                    components.append(
-                        {
-                            "type": "custom_field",
-                            "api_name": f"{object_api_name}.",
-                            "success": False,
-                            "error": {
-                                "code": "invalid_plan",
-                                "message": f"Field entry for {object_api_name} is missing api_name",
-                            },
-                        }
+            fields = custom_object.get("fields")
+            if isinstance(fields, list):
+                for field in fields:
+                    if not isinstance(field, dict):
+                        continue
+                    field_api_name = str(field.get("api_name") or "").strip()
+                    if not field_api_name:
+                        components.append(
+                            {
+                                "type": "custom_field",
+                                "api_name": f"{object_api_name}.",
+                                "success": False,
+                                "error": {
+                                    "code": "invalid_plan",
+                                    "message": f"Field entry for {object_api_name} is missing api_name",
+                                },
+                            }
+                        )
+                        continue
+                    planned_custom_components.append(
+                        ("custom_field", f"{object_api_name}.{field_api_name}")
                     )
-                    continue
 
-                field_response = await salesforce.tooling_create_custom_field(
-                    nango_connection_id=nango_connection_id,
-                    object_name=object_api_name,
-                    field_api_name=field_api_name,
-                    metadata=_build_field_metadata(field),
-                )
-                field_success = bool(field_response.get("success"))
-                field_component: dict = {
-                    "type": "custom_field",
-                    "api_name": f"{object_api_name}.{field_api_name}",
-                    "success": field_success,
-                    "sfdc_id": field_response.get("id"),
-                }
-                if not field_success:
-                    field_component["error"] = _extract_tooling_error(field_response)
-                else:
-                    fields_created += 1
-                components.append(field_component)
-
-        relationships = custom_object.get("relationships")
-        if isinstance(relationships, list):
-            for relationship in relationships:
-                if not isinstance(relationship, dict):
-                    continue
-                relationship_api_name = str(relationship.get("api_name") or "").strip()
-                if not relationship_api_name:
-                    components.append(
-                        {
-                            "type": "relationship",
-                            "api_name": f"{object_api_name}.",
-                            "success": False,
-                            "error": {
-                                "code": "invalid_plan",
-                                "message": f"Relationship entry for {object_api_name} is missing api_name",
-                            },
-                        }
+            relationships = custom_object.get("relationships")
+            if isinstance(relationships, list):
+                for relationship in relationships:
+                    if not isinstance(relationship, dict):
+                        continue
+                    relationship_api_name = str(relationship.get("api_name") or "").strip()
+                    if not relationship_api_name:
+                        components.append(
+                            {
+                                "type": "relationship",
+                                "api_name": f"{object_api_name}.",
+                                "success": False,
+                                "error": {
+                                    "code": "invalid_plan",
+                                    "message": f"Relationship entry for {object_api_name} is missing api_name",
+                                },
+                            }
+                        )
+                        continue
+                    planned_custom_components.append(
+                        ("relationship", f"{object_api_name}.{relationship_api_name}")
                     )
-                    continue
 
-                relationship_response = await salesforce.tooling_create_custom_field(
-                    nango_connection_id=nango_connection_id,
-                    object_name=object_api_name,
-                    field_api_name=relationship_api_name,
-                    metadata=_build_field_metadata(relationship),
-                )
-                relationship_success = bool(relationship_response.get("success"))
-                relationship_component: dict = {
-                    "type": "relationship",
-                    "api_name": f"{object_api_name}.{relationship_api_name}",
-                    "success": relationship_success,
-                    "sfdc_id": relationship_response.get("id"),
+        try:
+            zip_bytes = metadata_builder.build_custom_object_zip(metadata_custom_objects)
+            metadata_result = await salesforce.metadata_deploy_and_poll(
+                nango_connection_id=nango_connection_id,
+                zip_bytes=zip_bytes,
+            )
+            deploy_status = _metadata_status(metadata_result)
+            success_map, failure_map = _metadata_component_maps(metadata_result)
+
+            for component_type, api_name in planned_custom_components:
+                failed_component = failure_map.get(api_name)
+                successful_component = success_map.get(api_name)
+
+                success = bool(successful_component) and not bool(failed_component)
+                if not success and not failed_component and deploy_status == "Succeeded":
+                    success = True
+
+                component_result: dict = {
+                    "type": component_type,
+                    "api_name": api_name,
+                    "success": success,
+                    "sfdc_id": (
+                        (successful_component or {}).get("id")
+                        or (successful_component or {}).get("componentId")
+                    ),
                 }
-                if not relationship_success:
-                    relationship_component["error"] = _extract_tooling_error(relationship_response)
+
+                if not success:
+                    if failed_component:
+                        component_result["error"] = _metadata_failure_to_error(failed_component)
+                    else:
+                        component_result["error"] = {
+                            "code": "metadata_deploy_failed",
+                            "message": f"Metadata deploy ended with status {deploy_status}",
+                        }
                 else:
-                    relationships_created += 1
-                components.append(relationship_component)
+                    if component_type == "custom_object":
+                        objects_created += 1
+                    elif component_type == "custom_field":
+                        fields_created += 1
+                    elif component_type == "relationship":
+                        relationships_created += 1
+
+                components.append(component_result)
+        except HTTPException as exc:
+            for component_type, api_name in planned_custom_components:
+                components.append(
+                    _metadata_failure_component(
+                        component_type=component_type,
+                        api_name=api_name,
+                        detail=exc.detail,
+                    )
+                )
 
     standard_object_fields = plan.get("standard_object_fields")
     if not isinstance(standard_object_fields, list):
@@ -379,34 +453,6 @@ async def _rollback_component(nango_connection_id: str, component: dict) -> dict
                 rollback_result["error"] = _extract_tooling_error(delete_result)
             return rollback_result
 
-        if component_type == "custom_object":
-            if not resolved_id and api_name:
-                resolved_id = await _resolve_object_id(nango_connection_id, api_name)
-            if not resolved_id:
-                return {
-                    "type": component_type,
-                    "api_name": api_name,
-                    "success": False,
-                    "error": {
-                        "code": "not_found",
-                        "message": "Could not resolve Salesforce object ID for rollback",
-                    },
-                }
-
-            delete_result = await salesforce.tooling_delete(
-                nango_connection_id=nango_connection_id,
-                sobject_type="CustomObject",
-                record_id=str(resolved_id),
-            )
-            rollback_result = {
-                "type": component_type,
-                "api_name": api_name,
-                "success": bool(delete_result.get("success")),
-                "sfdc_id": str(resolved_id),
-            }
-            if not rollback_result["success"]:
-                rollback_result["error"] = _extract_tooling_error(delete_result)
-            return rollback_result
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
         return {
@@ -458,13 +504,70 @@ async def execute_rollback(nango_connection_id: str, deployment_result: dict) ->
             )
         )
 
-    for component in reversed(object_components):
-        rollback_components.append(
-            await _rollback_component(
+    if object_components:
+        object_names_in_order = [
+            str(component.get("api_name") or "").strip()
+            for component in reversed(object_components)
+            if str(component.get("api_name") or "").strip()
+        ]
+        object_names_for_deploy = list(dict.fromkeys(object_names_in_order))
+        try:
+            zip_bytes = metadata_builder.build_destructive_deploy_zip(object_names_for_deploy)
+            metadata_result = await salesforce.metadata_deploy_and_poll(
                 nango_connection_id=nango_connection_id,
-                component=component,
+                zip_bytes=zip_bytes,
             )
-        )
+            deploy_status = _metadata_status(metadata_result)
+            success_map, failure_map = _metadata_component_maps(metadata_result)
+
+            for component in reversed(object_components):
+                api_name = str(component.get("api_name") or "").strip()
+                if not api_name:
+                    continue
+                failed_component = failure_map.get(api_name)
+                successful_component = success_map.get(api_name)
+
+                success = bool(successful_component) and not bool(failed_component)
+                if not success and not failed_component and deploy_status == "Succeeded":
+                    success = True
+
+                result: dict = {
+                    "type": "custom_object",
+                    "api_name": api_name,
+                    "success": success,
+                    "sfdc_id": str(
+                        component.get("sfdc_id")
+                        or (successful_component or {}).get("id")
+                        or (successful_component or {}).get("componentId")
+                        or ""
+                    )
+                    or None,
+                }
+                if not success:
+                    if failed_component:
+                        result["error"] = _metadata_failure_to_error(failed_component)
+                    else:
+                        result["error"] = {
+                            "code": "metadata_deploy_failed",
+                            "message": f"Destructive deploy ended with status {deploy_status}",
+                        }
+                rollback_components.append(result)
+        except HTTPException as exc:
+            for component in reversed(object_components):
+                api_name = str(component.get("api_name") or "").strip()
+                if not api_name:
+                    continue
+                rollback_components.append(
+                    {
+                        "type": "custom_object",
+                        "api_name": api_name,
+                        "success": False,
+                        "sfdc_id": component.get("sfdc_id"),
+                        "error": _normalize_error(
+                            exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
+                        ),
+                    }
+                )
 
     total_components = len(rollback_components)
     successful_count = sum(1 for component in rollback_components if component.get("success"))
