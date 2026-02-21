@@ -1,4 +1,6 @@
 import asyncio
+import json
+import time
 
 import httpx
 from fastapi import HTTPException
@@ -69,6 +71,24 @@ def _parse_tooling_errors(payload: object) -> list[dict]:
         if parsed:
             return parsed
     return []
+
+
+def _metadata_error_payload(response: httpx.Response) -> dict:
+    error_code, error_message = _parse_salesforce_error(response)
+    detail: dict = {
+        "code": error_code,
+        "message": error_message,
+        "status_code": response.status_code,
+    }
+    try:
+        payload = response.json()
+        if isinstance(payload, (dict, list)):
+            detail["salesforce_response"] = payload
+    except ValueError:
+        body = response.text.strip()
+        if body:
+            detail["salesforce_response"] = body
+    return detail
 
 
 async def list_sobjects(connection_id: str) -> list[dict]:
@@ -226,8 +246,9 @@ async def tooling_create_custom_object(
         f"{_sfdc_base_url(instance_url)}/services/data/{settings.sfdc_api_version}"
         "/tooling/sobjects/CustomObject"
     )
+    developer_name = api_name[:-3] if api_name.endswith("__c") else api_name
     payload = {
-        "FullName": api_name,
+        "DeveloperName": developer_name,
         "Metadata": {
             "label": label,
             "pluralLabel": plural_label or label,
@@ -403,3 +424,117 @@ async def tooling_delete(
         }
 
     return {"id": record_id, "success": True, "errors": []}
+
+
+async def metadata_deploy(nango_connection_id: str, zip_bytes: bytes) -> str:
+    access_token, instance_url = await token_manager.get_valid_token(nango_connection_id)
+    url = (
+        f"{_sfdc_base_url(instance_url)}/services/data/{settings.sfdc_api_version}"
+        "/metadata/deployRequest"
+    )
+    headers = {
+        **_sfdc_headers(access_token),
+        "Accept": "application/json",
+    }
+    entity_content = {
+        "deployOptions": {
+            "rollbackOnError": True,
+            "singlePackage": True,
+            "testLevel": "NoTestRun",
+        }
+    }
+    files = {
+        "entity_content": (None, json.dumps(entity_content), "application/json"),
+        "file": ("deploy.zip", zip_bytes, "application/zip"),
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(url, headers=headers, files=files)
+
+    if response.status_code != 201:
+        raise HTTPException(status_code=502, detail=_metadata_error_payload(response))
+
+    payload = response.json()
+    if not isinstance(payload, dict) or not payload.get("id"):
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "salesforce_invalid_response",
+                "message": "Metadata deploy response missing deploy ID",
+            },
+        )
+
+    return str(payload["id"])
+
+
+async def metadata_deploy_status(nango_connection_id: str, deploy_id: str) -> dict:
+    access_token, instance_url = await token_manager.get_valid_token(nango_connection_id)
+    url = (
+        f"{_sfdc_base_url(instance_url)}/services/data/{settings.sfdc_api_version}"
+        f"/metadata/deployRequest/{deploy_id}"
+    )
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.get(
+            url,
+            headers={
+                **_sfdc_headers(access_token),
+                "Accept": "application/json",
+            },
+            params={"includeDetails": "true"},
+        )
+
+    if response.status_code >= 400:
+        raise HTTPException(status_code=502, detail=_metadata_error_payload(response))
+
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "salesforce_invalid_response",
+                "message": "Metadata deploy status response was not an object",
+            },
+        )
+
+    return payload
+
+
+async def metadata_deploy_and_poll(
+    nango_connection_id: str,
+    zip_bytes: bytes,
+    poll_interval: float = 3.0,
+    timeout: float = 120.0,
+) -> dict:
+    deploy_id = await metadata_deploy(nango_connection_id, zip_bytes)
+    deadline = time.monotonic() + timeout
+    terminal_states = {"Succeeded", "Failed", "Canceled"}
+    last_payload: dict | None = None
+
+    while time.monotonic() < deadline:
+        payload = await metadata_deploy_status(nango_connection_id, deploy_id)
+        last_payload = payload
+        deploy_result = payload.get("deployResult")
+        status = (
+            str(deploy_result.get("status"))
+            if isinstance(deploy_result, dict)
+            else str(payload.get("status") or "")
+        )
+        if status in terminal_states:
+            return payload
+        await asyncio.sleep(poll_interval)
+
+    raise HTTPException(
+        status_code=502,
+        detail={
+            "code": "metadata_deploy_timeout",
+            "message": f"Metadata deploy did not complete within {timeout} seconds",
+            "deploy_id": deploy_id,
+            "last_status": (
+                str(last_payload.get("deployResult", {}).get("status"))
+                if isinstance(last_payload, dict)
+                and isinstance(last_payload.get("deployResult"), dict)
+                else None
+            ),
+        },
+    )
