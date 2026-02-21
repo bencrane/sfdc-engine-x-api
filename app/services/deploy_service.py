@@ -220,6 +220,7 @@ async def execute_deployment(nango_connection_id: str, plan: dict) -> dict:
 
     if metadata_custom_objects:
         planned_custom_components: list[tuple[str, str]] = []
+        planned_field_specs: dict[str, dict] = {}
         for custom_object in metadata_custom_objects:
             object_api_name = str(custom_object.get("api_name") or "").strip()
             planned_custom_components.append(("custom_object", object_api_name))
@@ -243,9 +244,15 @@ async def execute_deployment(nango_connection_id: str, plan: dict) -> dict:
                             }
                         )
                         continue
+                    full_name = f"{object_api_name}.{field_api_name}"
                     planned_custom_components.append(
-                        ("custom_field", f"{object_api_name}.{field_api_name}")
+                        ("custom_field", full_name)
                     )
+                    planned_field_specs[full_name] = {
+                        "object_name": object_api_name,
+                        "field_api_name": field_api_name,
+                        "metadata": _build_field_metadata(field),
+                    }
 
             relationships = custom_object.get("relationships")
             if isinstance(relationships, list):
@@ -266,9 +273,15 @@ async def execute_deployment(nango_connection_id: str, plan: dict) -> dict:
                             }
                         )
                         continue
+                    full_name = f"{object_api_name}.{relationship_api_name}"
                     planned_custom_components.append(
-                        ("relationship", f"{object_api_name}.{relationship_api_name}")
+                        ("relationship", full_name)
                     )
+                    planned_field_specs[full_name] = {
+                        "object_name": object_api_name,
+                        "field_api_name": relationship_api_name,
+                        "metadata": _build_field_metadata(relationship),
+                    }
 
         try:
             zip_bytes = metadata_builder.build_custom_object_zip(metadata_custom_objects)
@@ -306,6 +319,42 @@ async def execute_deployment(nango_connection_id: str, plan: dict) -> dict:
                             "message": f"Metadata deploy ended with status {deploy_status}",
                         }
                 else:
+                    # Metadata deploy can report "Succeeded" without returning per-field successes.
+                    # Verify custom fields exist and backfill via Tooling API if missing.
+                    if component_type in {"custom_field", "relationship"}:
+                        resolved_field_id = await _resolve_field_id(
+                            nango_connection_id=nango_connection_id,
+                            full_name=api_name,
+                        )
+                        if resolved_field_id:
+                            component_result["sfdc_id"] = resolved_field_id
+                        else:
+                            field_spec = planned_field_specs.get(api_name)
+                            if field_spec:
+                                create_response = await salesforce.tooling_create_custom_field(
+                                    nango_connection_id=nango_connection_id,
+                                    object_name=str(field_spec["object_name"]),
+                                    field_api_name=str(field_spec["field_api_name"]),
+                                    metadata=dict(field_spec["metadata"]),
+                                )
+                                create_success = bool(create_response.get("success"))
+                                component_result["success"] = create_success
+                                component_result["sfdc_id"] = create_response.get("id")
+                                if not create_success:
+                                    component_result["error"] = _extract_tooling_error(create_response)
+                                else:
+                                    component_result.pop("error", None)
+                            else:
+                                component_result["success"] = False
+                                component_result["error"] = {
+                                    "code": "field_verification_failed",
+                                    "message": f"Could not verify or create field {api_name}",
+                                }
+
+                    if not component_result.get("success"):
+                        components.append(component_result)
+                        continue
+
                     if component_type == "custom_object":
                         objects_created += 1
                     elif component_type == "custom_field":
@@ -391,10 +440,15 @@ async def _resolve_field_id(nango_connection_id: str, full_name: str) -> str | N
         return None
     object_name, field_api_name = full_name.split(".", 1)
     developer_name = _strip_custom_suffix(field_api_name)
+    table_enum_or_id = object_name
+    if object_name.endswith("__c"):
+        object_id = await _resolve_object_id(nango_connection_id, object_name)
+        if object_id:
+            table_enum_or_id = object_id
     soql = (
         "SELECT Id FROM CustomField "
         f"WHERE DeveloperName = '{_soql_escape(developer_name)}' "
-        f"AND TableEnumOrId = '{_soql_escape(object_name)}' "
+        f"AND TableEnumOrId = '{_soql_escape(table_enum_or_id)}' "
         "ORDER BY CreatedDate DESC LIMIT 1"
     )
     records = await salesforce.tooling_query(nango_connection_id, soql)
@@ -425,8 +479,10 @@ async def _rollback_component(nango_connection_id: str, component: dict) -> dict
 
     try:
         if component_type in {"custom_field", "relationship"}:
-            if not resolved_id and api_name:
+            if api_name:
                 resolved_id = await _resolve_field_id(nango_connection_id, api_name)
+            if not resolved_id and component.get("sfdc_id"):
+                resolved_id = str(component.get("sfdc_id"))
             if not resolved_id:
                 return {
                     "type": component_type,
@@ -495,8 +551,28 @@ async def execute_rollback(nango_connection_id: str, deployment_result: dict) ->
     ]
 
     rollback_components: list[dict] = []
+    object_names_for_delete = {
+        str(component.get("api_name") or "").strip()
+        for component in object_components
+        if str(component.get("api_name") or "").strip()
+    }
 
     for component in reversed(field_like_components):
+        api_name = str(component.get("api_name") or "").strip()
+        object_name = api_name.split(".", 1)[0] if "." in api_name else ""
+        if object_name and object_name in object_names_for_delete:
+            rollback_components.append(
+                {
+                    "type": str(component.get("type") or "custom_field"),
+                    "api_name": api_name,
+                    "success": True,
+                    "sfdc_id": component.get("sfdc_id"),
+                    "skipped": True,
+                    "reason": "Deleted with parent custom object",
+                }
+            )
+            continue
+
         rollback_components.append(
             await _rollback_component(
                 nango_connection_id=nango_connection_id,
