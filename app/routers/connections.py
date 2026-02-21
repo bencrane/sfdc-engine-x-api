@@ -127,6 +127,17 @@ def _extract_identity_ids(raw: dict) -> tuple[str | None, str | None]:
     if user_id is None:
         user_id = raw.get("user_id")
 
+    identity_url = raw.get("id")
+    if isinstance(identity_url, str):
+        # Salesforce OAuth identity URL shape:
+        # https://login.salesforce.com/id/<org_id>/<user_id>
+        parts = [part for part in identity_url.strip("/").split("/") if part]
+        if len(parts) >= 2 and parts[-3:-2] == ["id"]:
+            if org_id is None:
+                org_id = parts[-2]
+            if user_id is None:
+                user_id = parts[-1]
+
     return org_id, user_id
 
 
@@ -191,7 +202,8 @@ async def confirm_connection_callback(
     connection = await token_manager.get_connection_credentials(nango_cid)
 
     connection_config = connection.get("connection_config") or {}
-    raw = connection.get("raw") or {}
+    credentials = connection.get("credentials") or {}
+    raw = connection.get("raw") or credentials.get("raw") or {}
     instance_url = connection_config.get("instance_url")
     sfdc_org_id, sfdc_user_id = _extract_identity_ids(raw if isinstance(raw, dict) else {})
 
