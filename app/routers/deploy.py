@@ -32,11 +32,8 @@ def _format_deploy_error_message(error: Exception) -> str:
 
 
 def _resolve_db_deployment_status(status: str) -> str:
-    if status in {"pending", "in_progress", "succeeded", "failed", "rolled_back"}:
-        return status
-    if status == "partial":
-        return "failed"
-    return "failed"
+    valid = {"pending", "in_progress", "succeeded", "partial", "failed", "rolled_back"}
+    return status if status in valid else "failed"
 
 
 @router.post("/execute", response_model=DeployResponse)
