@@ -134,3 +134,53 @@ async def pull_full_topology(connection_id: str) -> dict:
         "custom_objects_count": len(custom_object_names),
         "api_version": settings.sfdc_api_version,
     }
+
+
+async def composite_upsert(
+    nango_connection_id: str,
+    object_name: str,
+    external_id_field: str,
+    records: list[dict],
+) -> list[dict]:
+    access_token, instance_url = await token_manager.get_valid_token(nango_connection_id)
+    url = (
+        f"{_sfdc_base_url(instance_url)}/services/data/{settings.sfdc_api_version}"
+        f"/composite/sobjects/{object_name}/{external_id_field}"
+    )
+
+    enriched_records = []
+    for record in records:
+        record_payload = dict(record)
+        attributes = record_payload.get("attributes")
+        if not isinstance(attributes, dict):
+            attributes = {}
+        attributes["type"] = object_name
+        record_payload["attributes"] = attributes
+        enriched_records.append(record_payload)
+
+    payload = {"allOrNone": False, "records": enriched_records}
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.patch(url, headers=_sfdc_headers(access_token), json=payload)
+
+    if response.status_code != 200:
+        error_code, error_message = _parse_salesforce_error(response)
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": error_code,
+                "message": error_message,
+            },
+        )
+
+    response_payload = response.json()
+    if not isinstance(response_payload, list):
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "salesforce_invalid_response",
+                "message": "Salesforce composite upsert response was not a list",
+            },
+        )
+
+    return response_payload
