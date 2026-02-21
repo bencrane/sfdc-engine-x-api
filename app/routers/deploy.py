@@ -31,6 +31,14 @@ def _format_deploy_error_message(error: Exception) -> str:
     return str(error)
 
 
+def _resolve_db_deployment_status(status: str) -> str:
+    if status in {"pending", "in_progress", "succeeded", "failed", "rolled_back"}:
+        return status
+    if status == "partial":
+        return "failed"
+    return "failed"
+
+
 @router.post("/execute", response_model=DeployResponse)
 async def deploy_execute(
     body: DeployRequest,
@@ -129,7 +137,7 @@ async def deploy_execute(
             RETURNING id, status::text AS status, deployment_type::text AS deployment_type, deployed_at, result
             """,
             deploy_result,
-            deploy_result["status"],
+            _resolve_db_deployment_status(str(deploy_result.get("status", "failed"))),
             deployment_id,
             auth.org_id,
         )
