@@ -232,9 +232,11 @@ All tenant-scoped tables have `org_id` with NOT NULL constraint, foreign key, in
 
 ### Deploy (not yet implemented)
 - `POST /api/deploy/custom-objects` — create/update custom objects and fields
+- `POST /api/deploy/analytics` — create/update report folders, reports, dashboard folders, and dashboards
 - `POST /api/deploy/workflows` — create/update Flows, assignment rules
 - `POST /api/deploy/status` — check deployment status
 - `POST /api/deploy/rollback` — remove deployed objects/fields/workflows
+- `POST /api/deploy/analytics-rollback` — remove deployed analytics metadata
 
 ### Push (not yet implemented)
 - `POST /api/push/records` — upsert records into client's Salesforce
@@ -302,7 +304,9 @@ sfdc-engine-x/
 │       ├── 002_field_mappings_and_fixes.sql
 │       ├── 003_conflict_report_tenant_check.sql
 │       ├── 004_nango_connection_id.sql
-│       └── 005_mapping_version.sql
+│       ├── 005_mapping_version.sql
+│       ├── 005_deployment_partial_status.sql
+│       └── 006_analytics_deployment_types.sql
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   ├── API.md
@@ -379,7 +383,7 @@ git push origin main
 | 3 | ✅ Verified (live) | OAuth Connections via Nango |
 | 4 | ✅ Verified (live) | Topology Pull + Snapshots (1,328 objects from real Salesforce) |
 | 5A | ✅ Verified (live) | Conflict Detection — green/yellow/red scoring against real topology |
-| 5B | ✅ Built | Deploy + Rollback — Metadata API for objects, Tooling API for fields. Object deploy + rollback verified. Field visibility pending API limit reset. |
+| 5B | ✅ Built | Deploy + Rollback — Metadata API for objects and analytics (reports/dashboards), Tooling API for fields. Object deploy + rollback verified. Field visibility pending API limit reset. |
 | 6 | ✅ Verified (live) | Push + Field Mappings — mapping CRUD, preflight validation, version pinning, and composite upserts verified against real Salesforce |
 | 7 | 🔲 Next | Workflows — Flow/assignment rule deployment via Metadata API |
 
