@@ -2,6 +2,10 @@
 
 This document is a standalone reference for Salesforce metadata administration across the Tooling API (REST), SOAP Metadata API, and REST Metadata API.
 
+## See also
+
+For dashboard/report deployment details, see `docs/SALESFORCE_ANALYTICS_METADATA_DEPLOY_REFERENCE.md`.
+
 ---
 
 ## 1) API Landscape
