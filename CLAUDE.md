@@ -363,10 +363,16 @@ git push origin main
 
 | Phase | Status | What |
 |-------|--------|------|
-| 1 | ✅ Complete | Foundation — config, db pool, auth context/dependency, app shell |
-| 2 | ✅ Complete | Auth + Clients + Users + API Tokens |
-| 3 | ✅ Complete | OAuth Connections via Nango |
-| 4 | ✅ Complete | Topology Pull + Snapshots |
-| 5 | 🔲 Next | Conflicts + Deploy |
-| 6 | 🔲 Pending | Push + Field Mappings |
-| 7 | 🔲 Pending | Workflows |
+| 1 | ✅ Verified | Foundation — config, db pool, auth context/dependency, app shell |
+| 2 | ✅ Verified | Auth + Clients + Users + API Tokens |
+| 3 | ✅ Verified (live) | OAuth Connections via Nango |
+| 4 | ✅ Verified (live) | Topology Pull + Snapshots (1,328 objects from real Salesforce) |
+| 5A | ✅ Verified (live) | Conflict Detection — green/yellow/red scoring against real topology |
+| 5B | ✅ Built | Deploy + Rollback — Metadata API for objects, Tooling API for fields. Object deploy + rollback verified. Field visibility pending API limit reset. |
+| 6A | ✅ Verified (live) | Field Mapping CRUD |
+| 6B | ✅ Verified (live) | Push — Composite API upserts with field mapping, 2 records created + updated in real Salesforce |
+| 7 | 🔲 Next | Workflows — Flow/assignment rule deployment via Metadata API |
+
+### Known Issues
+- **Deploy field visibility:** Custom fields deployed via Metadata API were not visible in describe during testing. Likely caused by API rate limit exhaustion (REQUEST_LIMIT_EXCEEDED on Developer Edition). Pending verification after limit reset.
+- **Describe error surfacing:** Fixed — describe_sobject now returns structured error payloads instead of silently returning None. Errors are captured in `describe_errors` in topology snapshots.

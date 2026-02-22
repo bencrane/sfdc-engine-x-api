@@ -47,24 +47,30 @@ See `docs/writing_executor_directives.md` for the full guide with examples.
 | `docs/API.md` | Every endpoint with request/response shapes (implemented + planned) |
 | `docs/strategic_directive.md` | 15 non-negotiable build rules |
 | `docs/writing_executor_directives.md` | How to write directives for executor agents |
-| `supabase/migrations/` | 4 migration files (001-004) — all applied |
+| `supabase/migrations/` | 5 migration files (001-005) — all applied |
 | `app/config.py` | Pydantic Settings — all env vars |
-| `app/db.py` | asyncpg connection pool |
+| `app/db.py` | asyncpg connection pool with JSON/JSONB codecs |
 | `app/auth/` | AuthContext, get_current_auth, validate_client_access |
 | `app/services/token_manager.py` | Nango client — get_valid_token, create_connect_session, delete_connection |
-| `app/services/salesforce.py` | Salesforce REST — list_sobjects, describe_sobject, pull_full_topology |
+| `app/services/salesforce.py` | Salesforce REST + Metadata API — describe, topology pull, composite upsert, metadata deploy/poll |
+| `app/services/deploy_service.py` | Deploy orchestration — Metadata API for objects, Tooling API for fields, rollback |
+| `app/services/push_service.py` | Push orchestration — field mapping transform, 200-record batching, result aggregation |
+| `app/services/metadata_builder.py` | ZIP/XML builder for Metadata API deploys and destructive changes |
+| `app/services/conflict_checker.py` | Stateless conflict detection — compares deployment plans against topology snapshots |
 
 ## Build Order
 
 | Phase | Status | What |
 |-------|--------|------|
-| 1 | ✅ Done | Foundation — config, db pool, auth, app shell |
-| 2 | ✅ Done | Auth + Clients + Users + API Tokens (12 endpoints) |
-| 3 | ✅ Done | OAuth Connections via Nango (6 endpoints) |
-| 4 | ✅ Done | Topology Pull + Snapshots (3 endpoints) |
-| **5** | **🔲 Next** | **Conflicts + Deploy** — conflict checking against topology, Metadata API deployment, rollback |
-| 6 | 🔲 Pending | Push + Field Mappings — canonical-to-SFDC mapping, composite upserts, push logging |
-| 7 | 🔲 Pending | Workflows — Flow/assignment rule deployment via Tooling/Metadata API |
+| 1 | ✅ Verified | Foundation — config, db pool, auth, app shell |
+| 2 | ✅ Verified | Auth + Clients + Users + API Tokens (12 endpoints) |
+| 3 | ✅ Verified (live) | OAuth Connections via Nango (6 endpoints) |
+| 4 | ✅ Verified (live) | Topology Pull + Snapshots (3 endpoints, 1,328 objects) |
+| 5A | ✅ Verified (live) | Conflict Detection (2 endpoints) |
+| 5B | ✅ Built | Deploy + Rollback (4 endpoints) — Metadata API objects, Tooling API fields |
+| 6A | ✅ Verified (live) | Field Mapping CRUD (4 endpoints) |
+| 6B | ✅ Verified (live) | Push Service (3 endpoints) — Composite API upserts |
+| **7** | **🔲 Next** | **Workflows** — Flow/assignment rule deployment via Metadata API |
 
 ## Postmortem Lessons
 
