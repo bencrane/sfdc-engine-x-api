@@ -9,6 +9,7 @@ class PushRecordsRequest(BaseModel):
     external_id_field: str
     records: list[dict]
     canonical_object: str | None = None
+    mapping_version: int | None = None
 
 
 class PushRecordsResponse(BaseModel):

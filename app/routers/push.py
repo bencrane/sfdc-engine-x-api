@@ -90,7 +90,7 @@ async def push_records(
     if body.canonical_object is not None:
         mapping_row = await pool.fetchrow(
             """
-            SELECT field_mappings, sfdc_object, external_id_field
+            SELECT field_mappings, sfdc_object, external_id_field, mapping_version
             FROM crm_field_mappings
             WHERE org_id = $1
               AND client_id = $2
@@ -102,6 +102,19 @@ async def push_records(
             body.canonical_object,
         )
         if mapping_row is not None:
+            if (
+                body.mapping_version is not None
+                and int(mapping_row["mapping_version"]) != body.mapping_version
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Mapping version mismatch "
+                        f"\u2014 expected {body.mapping_version}, current is "
+                        f"{int(mapping_row['mapping_version'])}. "
+                        "Re-fetch mapping before pushing."
+                    ),
+                )
             mapping_payload = mapping_row["field_mappings"]
             if isinstance(mapping_payload, dict):
                 field_mapping = mapping_payload

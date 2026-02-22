@@ -238,8 +238,16 @@ All tenant-scoped tables have `org_id` with NOT NULL constraint, foreign key, in
 
 ### Push (not yet implemented)
 - `POST /api/push/records` — upsert records into client's Salesforce
+- `POST /api/push/validate` — preflight mapping validation for push payloads
 - `POST /api/push/status-update` — update field values on existing records
 - `POST /api/push/link` — create relationships between records
+
+### Mappings
+- `POST /api/mappings/create` — create canonical-to-SFDC mapping for a client/object
+- `POST /api/mappings/get` — get one active mapping for a canonical object
+- `POST /api/mappings/list` — list active mappings for a client
+- `POST /api/mappings/update` — update active mapping fields/object/external ID
+- `POST /api/mappings/deactivate` — deactivate an active mapping
 
 ### Workflows (not yet implemented)
 - `POST /api/workflows/list` — list active automations
@@ -267,6 +275,7 @@ sfdc-engine-x/
 │   ├── models/
 │   │   ├── __init__.py
 │   │   ├── connections.py       # (empty — models inline in router)
+│   │   ├── mappings.py          # Pydantic models for mapping endpoints
 │   │   ├── topology.py          # Pydantic models for topology endpoints
 │   │   └── deployments.py       # (empty — future)
 │   ├── routers/
@@ -277,6 +286,7 @@ sfdc-engine-x/
 │   │   ├── users.py             # User management
 │   │   ├── tokens.py            # API token lifecycle
 │   │   ├── connections.py       # OAuth connections via Nango
+│   │   ├── mappings.py          # Mapping CRUD endpoints
 │   │   ├── topology.py          # Topology pull + snapshots
 │   │   ├── conflicts.py         # (empty — Phase 5)
 │   │   ├── deploy.py            # (empty — Phase 5)
@@ -291,7 +301,8 @@ sfdc-engine-x/
 │       ├── 001_initial_schema.sql
 │       ├── 002_field_mappings_and_fixes.sql
 │       ├── 003_conflict_report_tenant_check.sql
-│       └── 004_nango_connection_id.sql
+│       ├── 004_nango_connection_id.sql
+│       └── 005_mapping_version.sql
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   ├── API.md
@@ -369,8 +380,7 @@ git push origin main
 | 4 | ✅ Verified (live) | Topology Pull + Snapshots (1,328 objects from real Salesforce) |
 | 5A | ✅ Verified (live) | Conflict Detection — green/yellow/red scoring against real topology |
 | 5B | ✅ Built | Deploy + Rollback — Metadata API for objects, Tooling API for fields. Object deploy + rollback verified. Field visibility pending API limit reset. |
-| 6A | ✅ Verified (live) | Field Mapping CRUD |
-| 6B | ✅ Verified (live) | Push — Composite API upserts with field mapping, 2 records created + updated in real Salesforce |
+| 6 | ✅ Verified (live) | Push + Field Mappings — mapping CRUD, preflight validation, version pinning, and composite upserts verified against real Salesforce |
 | 7 | 🔲 Next | Workflows — Flow/assignment rule deployment via Metadata API |
 
 ### Known Issues
