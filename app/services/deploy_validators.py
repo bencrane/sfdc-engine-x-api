@@ -21,7 +21,7 @@ CUSTOM_FIELD_TYPES = {
     "DateTime",
     "Phone",
     "Email",
-    "UrlType",
+    "Url",
 }
 RELATIONSHIP_FIELD_TYPES = {"Lookup", "MasterDetail"}
 
