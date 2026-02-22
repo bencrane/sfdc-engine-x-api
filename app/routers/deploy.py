@@ -121,6 +121,9 @@ async def deploy_execute(
         deploy_result = await deploy_service.execute_deployment(
             nango_connection_id=nango_connection_id,
             plan=body.plan,
+            pool=pool,
+            org_id=auth.org_id,
+            client_id=db_client_id,
         )
         updated_row = await pool.fetchrow(
             """

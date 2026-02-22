@@ -1,6 +1,10 @@
+import logging
+
 from fastapi import HTTPException
 
 from app.services import metadata_builder, salesforce
+
+logger = logging.getLogger(__name__)
 
 
 def _strip_custom_suffix(api_name: str) -> str:
@@ -411,7 +415,72 @@ async def execute_workflow_removal(
     }
 
 
-async def execute_deployment(nango_connection_id: str, plan: dict) -> dict:
+async def _best_effort_auto_map_custom_objects(
+    *,
+    pool,
+    org_id: str,
+    client_id,
+    components: list[dict],
+) -> None:
+    object_to_fields: dict[str, set[str]] = {}
+    successful_objects: set[str] = set()
+
+    for component in components:
+        if not isinstance(component, dict) or not component.get("success"):
+            continue
+
+        component_type = str(component.get("type") or "")
+        api_name = str(component.get("api_name") or "").strip()
+        if not api_name:
+            continue
+
+        if component_type == "custom_object":
+            successful_objects.add(api_name)
+            object_to_fields.setdefault(api_name, set())
+            continue
+
+        if component_type in {"custom_field", "relationship"} and "." in api_name:
+            object_api_name, field_api_name = api_name.split(".", 1)
+            if object_api_name in successful_objects and field_api_name:
+                object_to_fields.setdefault(object_api_name, set()).add(field_api_name)
+
+    for object_api_name in successful_objects:
+        field_names = sorted(object_to_fields.get(object_api_name, set()))
+        identity_mapping = {field_name: field_name for field_name in field_names}
+        await pool.execute(
+            """
+            INSERT INTO crm_field_mappings (
+                org_id,
+                client_id,
+                canonical_object,
+                sfdc_object,
+                field_mappings,
+                external_id_field,
+                is_active
+            )
+            VALUES ($1, $2, $3, $4, $5::jsonb, NULL, TRUE)
+            ON CONFLICT (org_id, client_id, canonical_object)
+            DO UPDATE SET
+                sfdc_object = EXCLUDED.sfdc_object,
+                field_mappings = EXCLUDED.field_mappings || crm_field_mappings.field_mappings,
+                is_active = TRUE
+            """,
+            org_id,
+            client_id,
+            object_api_name,
+            object_api_name,
+            identity_mapping,
+        )
+
+
+async def execute_deployment(
+    nango_connection_id: str,
+    plan: dict,
+    *,
+    pool,
+    org_id: str,
+    client_id,
+) -> dict:
     components: list[dict] = []
     objects_created = 0
     fields_created = 0
@@ -588,6 +657,22 @@ async def execute_deployment(nango_connection_id: str, plan: dict) -> dict:
                         relationships_created += 1
 
                 components.append(component_result)
+
+            try:
+                await _best_effort_auto_map_custom_objects(
+                    pool=pool,
+                    org_id=org_id,
+                    client_id=client_id,
+                    components=components,
+                )
+            except Exception:
+                logger.exception(
+                    "Auto-mapping upsert failed after deployment",
+                    extra={
+                        "org_id": org_id,
+                        "client_id": str(client_id),
+                    },
+                )
         except HTTPException as exc:
             for component_type, api_name in planned_custom_components:
                 components.append(
