@@ -573,7 +573,7 @@ def build_workflow_deploy_zip(
         flow_api_name = str(flow.get("api_name") or "").strip()
         if not flow_api_name:
             continue
-        raw_xml = flow.get("metadata_xml") or flow.get("xml")
+        raw_xml = flow.get("xml_content") or flow.get("metadata_xml") or flow.get("xml")
         if isinstance(raw_xml, str) and raw_xml.strip():
             xml_content = raw_xml
         else:
@@ -595,7 +595,11 @@ def build_workflow_deploy_zip(
         ).strip()
         if not object_name:
             continue
-        raw_xml = assignment_rule.get("metadata_xml") or assignment_rule.get("xml")
+        raw_xml = (
+            assignment_rule.get("xml_content")
+            or assignment_rule.get("metadata_xml")
+            or assignment_rule.get("xml")
+        )
         if isinstance(raw_xml, str) and raw_xml.strip():
             xml_content = raw_xml
         else:

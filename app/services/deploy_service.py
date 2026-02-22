@@ -3,6 +3,11 @@ import logging
 from fastapi import HTTPException
 
 from app.services import metadata_builder, salesforce
+from app.services.deploy_validators import (
+    validate_analytics_plan,
+    validate_custom_object_plan,
+    validate_workflow_plan,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -256,6 +261,13 @@ async def execute_workflow_deployment(
     plan: dict,
     provider_config_key: str | None = None,
 ) -> dict:
+    validation_errors = validate_workflow_plan(plan)
+    if validation_errors:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_deploy_plan", "errors": validation_errors},
+        )
+
     components, valid_flows, valid_assignment_rules = _workflow_metadata_components(plan)
 
     planned_components: list[tuple[str, str]] = []
@@ -427,6 +439,13 @@ async def execute_analytics_deployment(
     plan: dict,
     provider_config_key: str | None = None,
 ) -> dict:
+    validation_errors = validate_analytics_plan(plan)
+    if validation_errors:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_deploy_plan", "errors": validation_errors},
+        )
+
     report_folders_raw = plan.get("report_folders")
     if not isinstance(report_folders_raw, list):
         report_folders_raw = []
@@ -743,6 +762,13 @@ async def execute_deployment(
     client_id,
     provider_config_key: str | None = None,
 ) -> dict:
+    validation_errors = validate_custom_object_plan(plan)
+    if validation_errors:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_deploy_plan", "errors": validation_errors},
+        )
+
     components: list[dict] = []
     objects_created = 0
     fields_created = 0
