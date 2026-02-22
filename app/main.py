@@ -10,6 +10,7 @@ from app.routers.conflicts import router as conflicts_router
 from app.routers.connections import router as connections_router
 from app.routers.deploy import router as deploy_router
 from app.routers.field_mappings import router as field_mappings_router
+from app.routers.mappings import router as mappings_router
 from app.routers.push import router as push_router
 from app.routers.topology import router as topology_router
 from app.routers.tokens import router as tokens_router
@@ -37,6 +38,7 @@ app.include_router(auth_router)
 app.include_router(clients_router)
 app.include_router(connections_router)
 app.include_router(field_mappings_router)
+app.include_router(mappings_router)
 app.include_router(conflicts_router)
 app.include_router(deploy_router)
 app.include_router(push_router)
