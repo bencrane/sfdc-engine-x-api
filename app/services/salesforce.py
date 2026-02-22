@@ -138,7 +138,11 @@ async def describe_sobject(
     )
     response = await client.get(url, headers=_sfdc_headers(access_token))
     if response.status_code != 200:
-        return None
+        return {
+            "_error": True,
+            "status_code": response.status_code,
+            "error": _parse_salesforce_error(response),
+        }
     return response.json()
 
 
@@ -171,12 +175,18 @@ async def pull_full_topology(connection_id: str) -> dict:
         )
 
     objects: dict[str, dict] = {}
+    describe_errors: dict[str, dict] = {}
     for object_name, payload in results:
-        if payload is not None:
-            objects[object_name] = payload
+        if payload is None:
+            continue
+        if isinstance(payload, dict) and payload.get("_error"):
+            describe_errors[object_name] = payload
+            continue
+        objects[object_name] = payload
 
     return {
         "objects": objects,
+        "describe_errors": describe_errors,
         "object_names": object_names,
         "custom_object_names": custom_object_names,
         "objects_count": len(object_names),
