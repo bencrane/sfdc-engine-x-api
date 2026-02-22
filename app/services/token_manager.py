@@ -29,14 +29,18 @@ def _nango_headers() -> dict[str, str]:
     }
 
 
-def _raise_nango_error(status_code: int, payload: dict | str | None) -> None:
+def _raise_nango_error(
+    status_code: int,
+    payload: dict | str | None,
+    provider_config_key: str,
+) -> None:
     if status_code == 404:
         raise HTTPException(
             status_code=404,
             detail={
                 "code": "nango_connection_not_found",
                 "message": "Nango connection does not exist",
-                "provider": settings.nango_provider_config_key,
+                "provider": provider_config_key,
                 "nango_error": payload,
             },
         )
@@ -46,7 +50,7 @@ def _raise_nango_error(status_code: int, payload: dict | str | None) -> None:
             detail={
                 "code": "nango_refresh_exhausted",
                 "message": "Nango could not refresh credentials",
-                "provider": settings.nango_provider_config_key,
+                "provider": provider_config_key,
                 "nango_error": payload,
             },
         )
@@ -56,7 +60,7 @@ def _raise_nango_error(status_code: int, payload: dict | str | None) -> None:
         detail={
             "code": "nango_request_failed",
             "message": "Nango API request failed",
-            "provider": settings.nango_provider_config_key,
+            "provider": provider_config_key,
             "nango_error": payload,
         },
     )
@@ -70,9 +74,14 @@ def _parse_nango_error(response: httpx.Response) -> dict | str | None:
         return body or None
 
 
-async def create_connect_session(org_id: str, client_id: str) -> dict:
+async def create_connect_session(
+    org_id: str,
+    client_id: str,
+    provider_config_key: str | None = None,
+) -> dict:
+    resolved_key = provider_config_key or settings.nango_provider_config_key
     payload = {
-        "allowed_integrations": [settings.nango_provider_config_key],
+        "allowed_integrations": [resolved_key],
         "tags": {
             "org_id": org_id,
             "client_id": client_id,
@@ -84,7 +93,7 @@ async def create_connect_session(org_id: str, client_id: str) -> dict:
         response = await client.post(url, headers=_nango_headers(), json=payload)
 
     if response.status_code >= 400:
-        _raise_nango_error(response.status_code, _parse_nango_error(response))
+        _raise_nango_error(response.status_code, _parse_nango_error(response), resolved_key)
 
     body = response.json()
     data = body.get("data")
@@ -94,31 +103,42 @@ async def create_connect_session(org_id: str, client_id: str) -> dict:
             detail={
                 "code": "nango_invalid_response",
                 "message": "Nango connect session response was missing data",
-                "provider": settings.nango_provider_config_key,
+                "provider": resolved_key,
             },
         )
 
     return data
 
 
-async def get_connection_credentials(connection_id: str) -> dict:
+async def get_connection_credentials(
+    connection_id: str,
+    provider_config_key: str | None = None,
+) -> dict:
+    resolved_key = provider_config_key or settings.nango_provider_config_key
     url = _nango_url(
         f"/connections/{connection_id}",
-        {"provider_config_key": settings.nango_provider_config_key},
+        {"provider_config_key": resolved_key},
     )
 
     async with httpx.AsyncClient(timeout=20.0) as client:
         response = await client.get(url, headers=_nango_headers())
 
     if response.status_code >= 400:
-        _raise_nango_error(response.status_code, _parse_nango_error(response))
+        _raise_nango_error(response.status_code, _parse_nango_error(response), resolved_key)
 
     return response.json()
 
 
-async def get_valid_token(connection_id: str) -> tuple[str, str]:
+async def get_valid_token(
+    connection_id: str,
+    provider_config_key: str | None = None,
+) -> tuple[str, str]:
+    resolved_key = provider_config_key or settings.nango_provider_config_key
     try:
-        connection = await get_connection_credentials(connection_id)
+        connection = await get_connection_credentials(
+            connection_id,
+            provider_config_key=resolved_key,
+        )
     except HTTPException as exc:
         if exc.status_code in (404, 424):
             raise HTTPException(
@@ -126,7 +146,7 @@ async def get_valid_token(connection_id: str) -> tuple[str, str]:
                 detail={
                     "code": "nango_connection_unavailable",
                     "message": "Salesforce connection is unavailable in Nango",
-                    "provider": settings.nango_provider_config_key,
+                    "provider": resolved_key,
                     "nango_status_code": exc.status_code,
                     "nango_error": exc.detail,
                 },
@@ -144,21 +164,25 @@ async def get_valid_token(connection_id: str) -> tuple[str, str]:
             detail={
                 "code": "nango_invalid_credentials",
                 "message": "Nango connection credentials were incomplete",
-                "provider": settings.nango_provider_config_key,
+                "provider": resolved_key,
             },
         )
 
     return access_token, instance_url
 
 
-async def delete_connection(connection_id: str) -> None:
+async def delete_connection(
+    connection_id: str,
+    provider_config_key: str | None = None,
+) -> None:
+    resolved_key = provider_config_key or settings.nango_provider_config_key
     url = _nango_url(
         f"/connections/{connection_id}",
-        {"provider_config_key": settings.nango_provider_config_key},
+        {"provider_config_key": resolved_key},
     )
 
     async with httpx.AsyncClient(timeout=20.0) as client:
         response = await client.delete(url, headers=_nango_headers())
 
     if response.status_code >= 400:
-        _raise_nango_error(response.status_code, _parse_nango_error(response))
+        _raise_nango_error(response.status_code, _parse_nango_error(response), resolved_key)

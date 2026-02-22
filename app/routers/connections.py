@@ -12,11 +12,13 @@ router = APIRouter(prefix="/api/connections", tags=["connections"])
 
 class ConnectionCreateRequest(BaseModel):
     client_id: UUID
+    nango_provider_config_key: str | None = None
 
 
 class ConnectionCallbackRequest(BaseModel):
     client_id: UUID
     nango_connection_id: str | None = None
+    nango_provider_config_key: str | None = None
 
 
 class ConnectionListRequest(BaseModel):
@@ -61,6 +63,7 @@ class ConnectionListItem(BaseModel):
     instance_url: str | None
     last_used_at: str | None
     created_at: str
+    nango_provider_config_key: str | None
 
 
 class ConnectionListResponse(BaseModel):
@@ -76,6 +79,7 @@ class ConnectionGetResponse(BaseModel):
     sfdc_user_id: str | None
     last_used_at: str | None
     created_at: str
+    nango_provider_config_key: str | None
 
 
 class ConnectionRefreshResponse(BaseModel):
@@ -87,11 +91,11 @@ class ConnectionRevokeResponse(BaseModel):
     status: str
 
 
-async def _get_nango_connection_id(pool, org_id: str, client_id: str) -> str:
-    """Look up nango_connection_id from crm_connections. Raises 400 if not found."""
+async def _get_nango_connection_row(pool, org_id: str, client_id: str):
+    """Look up Nango connection metadata. Raises 400 if not found."""
     row = await pool.fetchrow(
         """
-        SELECT nango_connection_id
+        SELECT nango_connection_id, nango_provider_config_key
         FROM crm_connections
         WHERE org_id = $1
           AND client_id = $2
@@ -102,7 +106,7 @@ async def _get_nango_connection_id(pool, org_id: str, client_id: str) -> str:
     )
     if row is None or not row["nango_connection_id"]:
         raise HTTPException(status_code=400, detail="No Nango connection found for this client")
-    return row["nango_connection_id"]
+    return row
 
 
 def _extract_identity_ids(raw: dict) -> tuple[str | None, str | None]:
@@ -150,15 +154,29 @@ async def create_connection(
     pool = get_pool()
 
     client_id = await validate_client_access(auth, body.client_id, pool=pool)
-    connect_session = await token_manager.create_connect_session(auth.org_id, client_id)
+    connect_session = await token_manager.create_connect_session(
+        auth.org_id,
+        client_id,
+        provider_config_key=body.nango_provider_config_key,
+    )
 
     row = await pool.fetchrow(
         """
-        INSERT INTO crm_connections (org_id, client_id, nango_connection_id, status)
-        VALUES ($1, $2, $3, 'pending'::connection_status)
+        INSERT INTO crm_connections (
+            org_id,
+            client_id,
+            nango_connection_id,
+            status,
+            nango_provider_config_key
+        )
+        VALUES ($1, $2, $3, 'pending'::connection_status, $4)
         ON CONFLICT (org_id, client_id)
         DO UPDATE SET
             nango_connection_id = EXCLUDED.nango_connection_id,
+            nango_provider_config_key = COALESCE(
+                EXCLUDED.nango_provider_config_key,
+                crm_connections.nango_provider_config_key
+            ),
             status = 'pending'::connection_status,
             error_message = NULL
         RETURNING id, client_id, status::text AS status
@@ -166,6 +184,7 @@ async def create_connection(
         auth.org_id,
         client_id,
         client_id,
+        body.nango_provider_config_key,
     )
     if row is None:
         raise HTTPException(status_code=500, detail="Failed to create CRM connection")
@@ -195,11 +214,31 @@ async def confirm_connection_callback(
 
     client_id = await validate_client_access(auth, body.client_id, pool=pool)
 
+    existing_connection_row = await pool.fetchrow(
+        """
+        SELECT nango_connection_id, nango_provider_config_key
+        FROM crm_connections
+        WHERE org_id = $1
+          AND client_id = $2
+        """,
+        auth.org_id,
+        client_id,
+    )
+    resolved_provider_config_key = (
+        body.nango_provider_config_key
+        or (existing_connection_row["nango_provider_config_key"] if existing_connection_row else None)
+    )
+
     nango_cid = body.nango_connection_id
     if not nango_cid:
-        nango_cid = await _get_nango_connection_id(pool, auth.org_id, client_id)
+        if existing_connection_row is None or not existing_connection_row["nango_connection_id"]:
+            raise HTTPException(status_code=400, detail="No Nango connection found for this client")
+        nango_cid = existing_connection_row["nango_connection_id"]
 
-    connection = await token_manager.get_connection_credentials(nango_cid)
+    connection = await token_manager.get_connection_credentials(
+        nango_cid,
+        provider_config_key=resolved_provider_config_key,
+    )
 
     connection_config = connection.get("connection_config") or {}
     credentials = connection.get("credentials") or {}
@@ -209,12 +248,25 @@ async def confirm_connection_callback(
 
     row = await pool.fetchrow(
         """
-        INSERT INTO crm_connections (org_id, client_id, nango_connection_id, status, instance_url, sfdc_org_id, sfdc_user_id)
-        VALUES ($1, $2, $3, 'connected'::connection_status, $4, $5, $6)
+        INSERT INTO crm_connections (
+            org_id,
+            client_id,
+            nango_connection_id,
+            status,
+            instance_url,
+            sfdc_org_id,
+            sfdc_user_id,
+            nango_provider_config_key
+        )
+        VALUES ($1, $2, $3, 'connected'::connection_status, $4, $5, $6, $7)
         ON CONFLICT (org_id, client_id)
         DO UPDATE SET
             status = 'connected'::connection_status,
             nango_connection_id = EXCLUDED.nango_connection_id,
+            nango_provider_config_key = COALESCE(
+                EXCLUDED.nango_provider_config_key,
+                crm_connections.nango_provider_config_key
+            ),
             instance_url = EXCLUDED.instance_url,
             sfdc_org_id = EXCLUDED.sfdc_org_id,
             sfdc_user_id = EXCLUDED.sfdc_user_id,
@@ -227,6 +279,7 @@ async def confirm_connection_callback(
         instance_url,
         sfdc_org_id,
         sfdc_user_id,
+        resolved_provider_config_key,
     )
     if row is None:
         raise HTTPException(status_code=404, detail="Connection not found")
@@ -251,7 +304,8 @@ async def list_connections(
         client_id = await validate_client_access(auth, body.client_id, pool=pool)
         rows = await pool.fetch(
             """
-            SELECT id, client_id, status::text AS status, instance_url, last_used_at, created_at
+            SELECT id, client_id, status::text AS status, instance_url, last_used_at, created_at,
+                   nango_provider_config_key
             FROM crm_connections
             WHERE org_id = $1
               AND client_id = $2
@@ -263,7 +317,8 @@ async def list_connections(
     else:
         rows = await pool.fetch(
             """
-            SELECT id, client_id, status::text AS status, instance_url, last_used_at, created_at
+            SELECT id, client_id, status::text AS status, instance_url, last_used_at, created_at,
+                   nango_provider_config_key
             FROM crm_connections
             WHERE org_id = $1
             ORDER BY created_at DESC
@@ -280,6 +335,7 @@ async def list_connections(
                 instance_url=row["instance_url"],
                 last_used_at=row["last_used_at"].isoformat() if row["last_used_at"] else None,
                 created_at=row["created_at"].isoformat(),
+                nango_provider_config_key=row["nango_provider_config_key"],
             )
             for row in rows
         ]
@@ -297,7 +353,7 @@ async def get_connection(
     row = await pool.fetchrow(
         """
         SELECT id, client_id, status::text AS status, instance_url, sfdc_org_id, sfdc_user_id,
-               last_used_at, created_at
+               last_used_at, created_at, nango_provider_config_key
         FROM crm_connections
         WHERE id = $1
           AND org_id = $2
@@ -319,6 +375,7 @@ async def get_connection(
         sfdc_user_id=row["sfdc_user_id"],
         last_used_at=row["last_used_at"].isoformat() if row["last_used_at"] else None,
         created_at=row["created_at"].isoformat(),
+        nango_provider_config_key=row["nango_provider_config_key"],
     )
 
 
@@ -331,10 +388,15 @@ async def refresh_connection(
     pool = get_pool()
 
     client_id = await validate_client_access(auth, body.client_id, pool=pool)
-    nango_cid = await _get_nango_connection_id(pool, auth.org_id, client_id)
+    nango_connection_row = await _get_nango_connection_row(pool, auth.org_id, client_id)
+    nango_cid = nango_connection_row["nango_connection_id"]
+    nango_provider_config_key = nango_connection_row["nango_provider_config_key"]
 
     try:
-        await token_manager.get_connection_credentials(nango_cid)
+        await token_manager.get_connection_credentials(
+            nango_cid,
+            provider_config_key=nango_provider_config_key,
+        )
     except HTTPException as exc:
         if exc.status_code == 424:
             await pool.execute(
@@ -380,8 +442,11 @@ async def revoke_connection(
     pool = get_pool()
 
     client_id = await validate_client_access(auth, body.client_id, pool=pool)
-    nango_cid = await _get_nango_connection_id(pool, auth.org_id, client_id)
-    await token_manager.delete_connection(nango_cid)
+    nango_connection_row = await _get_nango_connection_row(pool, auth.org_id, client_id)
+    await token_manager.delete_connection(
+        nango_connection_row["nango_connection_id"],
+        provider_config_key=nango_connection_row["nango_provider_config_key"],
+    )
 
     command_status = await pool.execute(
         """

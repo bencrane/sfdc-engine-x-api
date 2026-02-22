@@ -49,7 +49,7 @@ async def deploy_execute(
 
     connection_row = await pool.fetchrow(
         """
-        SELECT id, nango_connection_id
+        SELECT id, nango_connection_id, nango_provider_config_key
         FROM crm_connections
         WHERE org_id = $1
           AND client_id = $2
@@ -124,6 +124,7 @@ async def deploy_execute(
             pool=pool,
             org_id=auth.org_id,
             client_id=db_client_id,
+            provider_config_key=connection_row["nango_provider_config_key"],
         )
         updated_row = await pool.fetchrow(
             """
@@ -286,7 +287,7 @@ async def deploy_rollback(
 
     connection_row = await pool.fetchrow(
         """
-        SELECT id, nango_connection_id
+        SELECT id, nango_connection_id, nango_provider_config_key
         FROM crm_connections
         WHERE id = $1
           AND org_id = $2
@@ -305,6 +306,7 @@ async def deploy_rollback(
     rollback_result = await deploy_service.execute_rollback(
         nango_connection_id=connection_row["nango_connection_id"],
         deployment_result=deployment_result,
+        provider_config_key=connection_row["nango_provider_config_key"],
     )
     updated_result = dict(deployment_result)
     updated_result["rollback"] = rollback_result
@@ -358,7 +360,7 @@ async def deploy_analytics(
 
     connection_row = await pool.fetchrow(
         """
-        SELECT id, nango_connection_id
+        SELECT id, nango_connection_id, nango_provider_config_key
         FROM crm_connections
         WHERE org_id = $1
           AND client_id = $2
@@ -430,6 +432,7 @@ async def deploy_analytics(
         deploy_result = await deploy_service.execute_analytics_deployment(
             nango_connection_id=nango_connection_id,
             plan=body.plan,
+            provider_config_key=connection_row["nango_provider_config_key"],
         )
         updated_row = await pool.fetchrow(
             """
@@ -519,7 +522,7 @@ async def deploy_analytics_rollback(
 
     connection_row = await pool.fetchrow(
         """
-        SELECT id, nango_connection_id
+        SELECT id, nango_connection_id, nango_provider_config_key
         FROM crm_connections
         WHERE id = $1
           AND org_id = $2
@@ -538,6 +541,7 @@ async def deploy_analytics_rollback(
     rollback_result = await deploy_service.execute_analytics_rollback(
         nango_connection_id=connection_row["nango_connection_id"],
         deployment_result=deployment_result,
+        provider_config_key=connection_row["nango_provider_config_key"],
     )
     updated_result = dict(deployment_result)
     updated_result["rollback"] = rollback_result

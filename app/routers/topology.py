@@ -32,7 +32,7 @@ async def pull_topology(
 
     connection_row = await pool.fetchrow(
         """
-        SELECT id, nango_connection_id
+        SELECT id, nango_connection_id, nango_provider_config_key
         FROM crm_connections
         WHERE org_id = $1
           AND client_id = $2
@@ -48,7 +48,10 @@ async def pull_topology(
     if not nango_connection_id:
         raise HTTPException(status_code=400, detail="Connection has no Nango connection ID")
 
-    snapshot = await salesforce.pull_full_topology(nango_connection_id)
+    snapshot = await salesforce.pull_full_topology(
+        nango_connection_id,
+        provider_config_key=connection_row["nango_provider_config_key"],
+    )
 
     version = await pool.fetchval(
         """

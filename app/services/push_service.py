@@ -52,6 +52,7 @@ async def push_records(
     external_id_field: str,
     records: list[dict],
     field_mapping: dict | None = None,
+    provider_config_key: str | None = None,
 ) -> dict:
     transformed_records = []
     for record in records:
@@ -67,6 +68,7 @@ async def push_records(
                 object_name=object_type,
                 external_id_field=external_id_field,
                 records=batch,
+                provider_config_key=provider_config_key,
             )
         except HTTPException as error:
             batch_results = _build_batch_failure_result(error, len(batch))

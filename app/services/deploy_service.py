@@ -251,7 +251,11 @@ def _workflow_metadata_components(
     return components, valid_flows, valid_assignment_rules
 
 
-async def execute_workflow_deployment(nango_connection_id: str, plan: dict) -> dict:
+async def execute_workflow_deployment(
+    nango_connection_id: str,
+    plan: dict,
+    provider_config_key: str | None = None,
+) -> dict:
     components, valid_flows, valid_assignment_rules = _workflow_metadata_components(plan)
 
     planned_components: list[tuple[str, str]] = []
@@ -278,6 +282,7 @@ async def execute_workflow_deployment(nango_connection_id: str, plan: dict) -> d
             metadata_result = await salesforce.metadata_deploy_and_poll(
                 nango_connection_id=nango_connection_id,
                 zip_bytes=zip_bytes,
+                provider_config_key=provider_config_key,
             )
             deploy_status = _metadata_status(metadata_result)
             success_map, failure_map = _metadata_component_maps(metadata_result)
@@ -337,6 +342,7 @@ async def execute_workflow_removal(
     nango_connection_id: str,
     flow_api_names: list[str],
     assignment_rule_objects: list[str],
+    provider_config_key: str | None = None,
 ) -> dict:
     normalized_flow_names = [str(name).strip() for name in flow_api_names if str(name).strip()]
     normalized_assignment_objects = [
@@ -360,6 +366,7 @@ async def execute_workflow_removal(
             metadata_result = await salesforce.metadata_deploy_and_poll(
                 nango_connection_id=nango_connection_id,
                 zip_bytes=zip_bytes,
+                provider_config_key=provider_config_key,
             )
             deploy_status = _metadata_status(metadata_result)
             success_map, failure_map = _metadata_component_maps(metadata_result)
@@ -415,7 +422,11 @@ async def execute_workflow_removal(
     }
 
 
-async def execute_analytics_deployment(nango_connection_id: str, plan: dict) -> dict:
+async def execute_analytics_deployment(
+    nango_connection_id: str,
+    plan: dict,
+    provider_config_key: str | None = None,
+) -> dict:
     report_folders_raw = plan.get("report_folders")
     if not isinstance(report_folders_raw, list):
         report_folders_raw = []
@@ -489,6 +500,7 @@ async def execute_analytics_deployment(nango_connection_id: str, plan: dict) -> 
             metadata_result = await salesforce.metadata_deploy_and_poll(
                 nango_connection_id=nango_connection_id,
                 zip_bytes=zip_bytes,
+                provider_config_key=provider_config_key,
             )
             deploy_status = _metadata_status(metadata_result)
             success_map, failure_map = _metadata_component_maps(metadata_result)
@@ -547,7 +559,11 @@ async def execute_analytics_deployment(nango_connection_id: str, plan: dict) -> 
     }
 
 
-async def execute_analytics_rollback(nango_connection_id: str, deployment_result: dict) -> dict:
+async def execute_analytics_rollback(
+    nango_connection_id: str,
+    deployment_result: dict,
+    provider_config_key: str | None = None,
+) -> dict:
     components = deployment_result.get("components")
     if not isinstance(components, list):
         components = []
@@ -609,6 +625,7 @@ async def execute_analytics_rollback(nango_connection_id: str, deployment_result
             metadata_result = await salesforce.metadata_deploy_and_poll(
                 nango_connection_id=nango_connection_id,
                 zip_bytes=zip_bytes,
+                provider_config_key=provider_config_key,
             )
             deploy_status = _metadata_status(metadata_result)
             success_map, failure_map = _metadata_component_maps(metadata_result)
@@ -724,6 +741,7 @@ async def execute_deployment(
     pool,
     org_id: str,
     client_id,
+    provider_config_key: str | None = None,
 ) -> dict:
     components: list[dict] = []
     objects_created = 0
@@ -826,6 +844,7 @@ async def execute_deployment(
             metadata_result = await salesforce.metadata_deploy_and_poll(
                 nango_connection_id=nango_connection_id,
                 zip_bytes=zip_bytes,
+                provider_config_key=provider_config_key,
             )
             deploy_status = _metadata_status(metadata_result)
             success_map, failure_map = _metadata_component_maps(metadata_result)
@@ -863,6 +882,7 @@ async def execute_deployment(
                         resolved_field_id = await _resolve_field_id(
                             nango_connection_id=nango_connection_id,
                             full_name=api_name,
+                            provider_config_key=provider_config_key,
                         )
                         if resolved_field_id:
                             component_result["sfdc_id"] = resolved_field_id
@@ -874,6 +894,7 @@ async def execute_deployment(
                                     object_name=str(field_spec["object_name"]),
                                     field_api_name=str(field_spec["field_api_name"]),
                                     metadata=dict(field_spec["metadata"]),
+                                    provider_config_key=provider_config_key,
                                 )
                                 create_success = bool(create_response.get("success"))
                                 component_result["success"] = create_success
@@ -964,6 +985,7 @@ async def execute_deployment(
                 object_name=object_name,
                 field_api_name=field_api_name,
                 metadata=_build_field_metadata(field),
+                provider_config_key=provider_config_key,
             )
             field_success = bool(field_response.get("success"))
             field_component: dict = {
@@ -989,14 +1011,22 @@ async def execute_deployment(
     }
 
 
-async def _resolve_field_id(nango_connection_id: str, full_name: str) -> str | None:
+async def _resolve_field_id(
+    nango_connection_id: str,
+    full_name: str,
+    provider_config_key: str | None = None,
+) -> str | None:
     if "." not in full_name:
         return None
     object_name, field_api_name = full_name.split(".", 1)
     developer_name = _strip_custom_suffix(field_api_name)
     table_enum_or_id = object_name
     if object_name.endswith("__c"):
-        object_id = await _resolve_object_id(nango_connection_id, object_name)
+        object_id = await _resolve_object_id(
+            nango_connection_id,
+            object_name,
+            provider_config_key=provider_config_key,
+        )
         if object_id:
             table_enum_or_id = object_id
     soql = (
@@ -1005,28 +1035,44 @@ async def _resolve_field_id(nango_connection_id: str, full_name: str) -> str | N
         f"AND TableEnumOrId = '{_soql_escape(table_enum_or_id)}' "
         "ORDER BY CreatedDate DESC LIMIT 1"
     )
-    records = await salesforce.tooling_query(nango_connection_id, soql)
+    records = await salesforce.tooling_query(
+        nango_connection_id,
+        soql,
+        provider_config_key=provider_config_key,
+    )
     if not records:
         return None
     record_id = records[0].get("Id")
     return str(record_id) if record_id else None
 
 
-async def _resolve_object_id(nango_connection_id: str, object_api_name: str) -> str | None:
+async def _resolve_object_id(
+    nango_connection_id: str,
+    object_api_name: str,
+    provider_config_key: str | None = None,
+) -> str | None:
     developer_name = _strip_custom_suffix(object_api_name)
     soql = (
         "SELECT Id FROM CustomObject "
         f"WHERE DeveloperName = '{_soql_escape(developer_name)}' "
         "ORDER BY CreatedDate DESC LIMIT 1"
     )
-    records = await salesforce.tooling_query(nango_connection_id, soql)
+    records = await salesforce.tooling_query(
+        nango_connection_id,
+        soql,
+        provider_config_key=provider_config_key,
+    )
     if not records:
         return None
     record_id = records[0].get("Id")
     return str(record_id) if record_id else None
 
 
-async def _rollback_component(nango_connection_id: str, component: dict) -> dict:
+async def _rollback_component(
+    nango_connection_id: str,
+    component: dict,
+    provider_config_key: str | None = None,
+) -> dict:
     component_type = str(component.get("type", ""))
     api_name = str(component.get("api_name") or "")
     resolved_id = component.get("sfdc_id")
@@ -1034,7 +1080,11 @@ async def _rollback_component(nango_connection_id: str, component: dict) -> dict
     try:
         if component_type in {"custom_field", "relationship"}:
             if api_name:
-                resolved_id = await _resolve_field_id(nango_connection_id, api_name)
+                resolved_id = await _resolve_field_id(
+                    nango_connection_id,
+                    api_name,
+                    provider_config_key=provider_config_key,
+                )
             if not resolved_id and component.get("sfdc_id"):
                 resolved_id = str(component.get("sfdc_id"))
             if not resolved_id:
@@ -1052,6 +1102,7 @@ async def _rollback_component(nango_connection_id: str, component: dict) -> dict
                 nango_connection_id=nango_connection_id,
                 sobject_type="CustomField",
                 record_id=str(resolved_id),
+                provider_config_key=provider_config_key,
             )
             rollback_result: dict = {
                 "type": component_type,
@@ -1083,7 +1134,11 @@ async def _rollback_component(nango_connection_id: str, component: dict) -> dict
     }
 
 
-async def execute_rollback(nango_connection_id: str, deployment_result: dict) -> dict:
+async def execute_rollback(
+    nango_connection_id: str,
+    deployment_result: dict,
+    provider_config_key: str | None = None,
+) -> dict:
     components = deployment_result.get("components")
     if not isinstance(components, list):
         components = []
@@ -1131,6 +1186,7 @@ async def execute_rollback(nango_connection_id: str, deployment_result: dict) ->
             await _rollback_component(
                 nango_connection_id=nango_connection_id,
                 component=component,
+                provider_config_key=provider_config_key,
             )
         )
 
@@ -1146,6 +1202,7 @@ async def execute_rollback(nango_connection_id: str, deployment_result: dict) ->
             metadata_result = await salesforce.metadata_deploy_and_poll(
                 nango_connection_id=nango_connection_id,
                 zip_bytes=zip_bytes,
+                provider_config_key=provider_config_key,
             )
             deploy_status = _metadata_status(metadata_result)
             success_map, failure_map = _metadata_component_maps(metadata_result)

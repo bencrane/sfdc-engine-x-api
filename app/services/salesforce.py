@@ -91,8 +91,14 @@ def _metadata_error_payload(response: httpx.Response) -> dict:
     return detail
 
 
-async def list_sobjects(connection_id: str) -> list[dict]:
-    access_token, instance_url = await token_manager.get_valid_token(connection_id)
+async def list_sobjects(
+    connection_id: str,
+    provider_config_key: str | None = None,
+) -> list[dict]:
+    access_token, instance_url = await token_manager.get_valid_token(
+        connection_id,
+        provider_config_key=provider_config_key,
+    )
     url = (
         f"{_sfdc_base_url(instance_url)}/services/data/"
         f"{settings.sfdc_api_version}/sobjects/"
@@ -146,8 +152,14 @@ async def describe_sobject(
     return response.json()
 
 
-async def pull_full_topology(connection_id: str) -> dict:
-    sobjects = await list_sobjects(connection_id)
+async def pull_full_topology(
+    connection_id: str,
+    provider_config_key: str | None = None,
+) -> dict:
+    sobjects = await list_sobjects(
+        connection_id,
+        provider_config_key=provider_config_key,
+    )
     object_names = [
         str(item["name"]) for item in sobjects if isinstance(item, dict) and item.get("name")
     ]
@@ -155,7 +167,10 @@ async def pull_full_topology(connection_id: str) -> dict:
         object_name for object_name in object_names if object_name.endswith("__c")
     ]
 
-    access_token, instance_url = await token_manager.get_valid_token(connection_id)
+    access_token, instance_url = await token_manager.get_valid_token(
+        connection_id,
+        provider_config_key=provider_config_key,
+    )
     semaphore = asyncio.Semaphore(10)
 
     async with httpx.AsyncClient(timeout=60.0) as client:
@@ -200,8 +215,12 @@ async def composite_upsert(
     object_name: str,
     external_id_field: str,
     records: list[dict],
+    provider_config_key: str | None = None,
 ) -> list[dict]:
-    access_token, instance_url = await token_manager.get_valid_token(nango_connection_id)
+    access_token, instance_url = await token_manager.get_valid_token(
+        nango_connection_id,
+        provider_config_key=provider_config_key,
+    )
     url = (
         f"{_sfdc_base_url(instance_url)}/services/data/{settings.sfdc_api_version}"
         f"/composite/sobjects/{object_name}/{external_id_field}"
@@ -250,8 +269,12 @@ async def tooling_create_custom_object(
     api_name: str,
     label: str,
     plural_label: str | None = None,
+    provider_config_key: str | None = None,
 ) -> dict:
-    access_token, instance_url = await token_manager.get_valid_token(nango_connection_id)
+    access_token, instance_url = await token_manager.get_valid_token(
+        nango_connection_id,
+        provider_config_key=provider_config_key,
+    )
     url = (
         f"{_sfdc_base_url(instance_url)}/services/data/{settings.sfdc_api_version}"
         "/tooling/sobjects/CustomObject"
@@ -311,8 +334,12 @@ async def tooling_create_custom_field(
     object_name: str,
     field_api_name: str,
     metadata: dict,
+    provider_config_key: str | None = None,
 ) -> dict:
-    access_token, instance_url = await token_manager.get_valid_token(nango_connection_id)
+    access_token, instance_url = await token_manager.get_valid_token(
+        nango_connection_id,
+        provider_config_key=provider_config_key,
+    )
     url = (
         f"{_sfdc_base_url(instance_url)}/services/data/{settings.sfdc_api_version}"
         "/tooling/sobjects/CustomField"
@@ -357,8 +384,15 @@ async def tooling_create_custom_field(
     }
 
 
-async def tooling_query(nango_connection_id: str, soql: str) -> list[dict]:
-    access_token, instance_url = await token_manager.get_valid_token(nango_connection_id)
+async def tooling_query(
+    nango_connection_id: str,
+    soql: str,
+    provider_config_key: str | None = None,
+) -> list[dict]:
+    access_token, instance_url = await token_manager.get_valid_token(
+        nango_connection_id,
+        provider_config_key=provider_config_key,
+    )
     url = (
         f"{_sfdc_base_url(instance_url)}/services/data/{settings.sfdc_api_version}"
         "/tooling/query"
@@ -398,8 +432,12 @@ async def tooling_delete(
     nango_connection_id: str,
     sobject_type: str,
     record_id: str,
+    provider_config_key: str | None = None,
 ) -> dict:
-    access_token, instance_url = await token_manager.get_valid_token(nango_connection_id)
+    access_token, instance_url = await token_manager.get_valid_token(
+        nango_connection_id,
+        provider_config_key=provider_config_key,
+    )
     url = (
         f"{_sfdc_base_url(instance_url)}/services/data/{settings.sfdc_api_version}"
         f"/tooling/sobjects/{sobject_type}/{record_id}"
@@ -436,8 +474,15 @@ async def tooling_delete(
     return {"id": record_id, "success": True, "errors": []}
 
 
-async def metadata_deploy(nango_connection_id: str, zip_bytes: bytes) -> str:
-    access_token, instance_url = await token_manager.get_valid_token(nango_connection_id)
+async def metadata_deploy(
+    nango_connection_id: str,
+    zip_bytes: bytes,
+    provider_config_key: str | None = None,
+) -> str:
+    access_token, instance_url = await token_manager.get_valid_token(
+        nango_connection_id,
+        provider_config_key=provider_config_key,
+    )
     url = (
         f"{_sfdc_base_url(instance_url)}/services/data/{settings.sfdc_api_version}"
         "/metadata/deployRequest"
@@ -477,8 +522,15 @@ async def metadata_deploy(nango_connection_id: str, zip_bytes: bytes) -> str:
     return str(payload["id"])
 
 
-async def metadata_deploy_status(nango_connection_id: str, deploy_id: str) -> dict:
-    access_token, instance_url = await token_manager.get_valid_token(nango_connection_id)
+async def metadata_deploy_status(
+    nango_connection_id: str,
+    deploy_id: str,
+    provider_config_key: str | None = None,
+) -> dict:
+    access_token, instance_url = await token_manager.get_valid_token(
+        nango_connection_id,
+        provider_config_key=provider_config_key,
+    )
     url = (
         f"{_sfdc_base_url(instance_url)}/services/data/{settings.sfdc_api_version}"
         f"/metadata/deployRequest/{deploy_id}"
@@ -515,14 +567,23 @@ async def metadata_deploy_and_poll(
     zip_bytes: bytes,
     poll_interval: float = 3.0,
     timeout: float = 120.0,
+    provider_config_key: str | None = None,
 ) -> dict:
-    deploy_id = await metadata_deploy(nango_connection_id, zip_bytes)
+    deploy_id = await metadata_deploy(
+        nango_connection_id,
+        zip_bytes,
+        provider_config_key=provider_config_key,
+    )
     deadline = time.monotonic() + timeout
     terminal_states = {"Succeeded", "Failed", "Canceled"}
     last_payload: dict | None = None
 
     while time.monotonic() < deadline:
-        payload = await metadata_deploy_status(nango_connection_id, deploy_id)
+        payload = await metadata_deploy_status(
+            nango_connection_id,
+            deploy_id,
+            provider_config_key=provider_config_key,
+        )
         last_payload = payload
         deploy_result = payload.get("deployResult")
         status = (

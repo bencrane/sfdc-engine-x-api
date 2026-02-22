@@ -60,7 +60,7 @@ async def workflows_list(
 
     connection_row = await pool.fetchrow(
         """
-        SELECT id, nango_connection_id
+        SELECT id, nango_connection_id, nango_provider_config_key
         FROM crm_connections
         WHERE org_id = $1
           AND client_id = $2
@@ -83,6 +83,7 @@ async def workflows_list(
                 "SELECT Id, DeveloperName, ActiveVersionId, LatestVersionId "
                 "FROM FlowDefinition ORDER BY DeveloperName"
             ),
+            provider_config_key=connection_row["nango_provider_config_key"],
         )
         assignment_rule_rows = await salesforce.tooling_query(
             nango_connection_id=nango_connection_id,
@@ -90,6 +91,7 @@ async def workflows_list(
                 "SELECT Id, Name, SobjectType, Active "
                 "FROM AssignmentRule WHERE Active = true ORDER BY SobjectType, Name"
             ),
+            provider_config_key=connection_row["nango_provider_config_key"],
         )
     finally:
         await pool.execute(
@@ -143,7 +145,7 @@ async def workflows_deploy(
 
     connection_row = await pool.fetchrow(
         """
-        SELECT id, nango_connection_id
+        SELECT id, nango_connection_id, nango_provider_config_key
         FROM crm_connections
         WHERE org_id = $1
           AND client_id = $2
@@ -216,6 +218,7 @@ async def workflows_deploy(
         deploy_result = await deploy_service.execute_workflow_deployment(
             nango_connection_id=nango_connection_id,
             plan=body.plan,
+            provider_config_key=connection_row["nango_provider_config_key"],
         )
         updated_row = await pool.fetchrow(
             """
@@ -297,7 +300,7 @@ async def workflows_remove(
 
     connection_row = await pool.fetchrow(
         """
-        SELECT id, nango_connection_id
+        SELECT id, nango_connection_id, nango_provider_config_key
         FROM crm_connections
         WHERE org_id = $1
           AND client_id = $2
@@ -359,6 +362,7 @@ async def workflows_remove(
             nango_connection_id=nango_connection_id,
             flow_api_names=flow_api_names,
             assignment_rule_objects=assignment_rule_objects,
+            provider_config_key=connection_row["nango_provider_config_key"],
         )
         updated_row = await pool.fetchrow(
             """

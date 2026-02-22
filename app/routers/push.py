@@ -67,7 +67,7 @@ async def push_records(
 
     connection_row = await pool.fetchrow(
         """
-        SELECT id, nango_connection_id
+        SELECT id, nango_connection_id, nango_provider_config_key
         FROM crm_connections
         WHERE org_id = $1
           AND client_id = $2
@@ -169,6 +169,7 @@ async def push_records(
             external_id_field=resolved_external_id_field,
             records=body.records,
             field_mapping=field_mapping,
+            provider_config_key=connection_row["nango_provider_config_key"],
         )
 
         updated_row = await pool.fetchrow(

@@ -142,7 +142,9 @@ Nango handles the full Salesforce OAuth lifecycle:
 3. Nango exchanges the code for tokens, stores them, handles refresh automatically
 4. Our `token_manager.py` calls Nango to get a fresh access token before each Salesforce API call
 
-**Tokens never touch our database.** Nango holds all OAuth credentials. Our `crm_connections` table stores metadata only: status, instance_url, sfdc_org_id, nango_connection_id.
+**Tokens never touch our database.** Nango holds all OAuth credentials. Our `crm_connections` table stores metadata only: status, instance_url, sfdc_org_id, nango_connection_id, nango_provider_config_key.
+
+Per-connection `nango_provider_config_key` (nullable) overrides the global `NANGO_PROVIDER_CONFIG_KEY` default. This allows different orgs/clients to authorize against different Salesforce Connected Apps while preserving backward compatibility for existing connections.
 
 The `client_id` (UUID) is used as the Nango `connectionId`.
 
@@ -156,7 +158,7 @@ The `client_id` (UUID) is used as the Nango `connectionId`.
 | `clients` | Org's customers (the staffing agencies, etc.) |
 | `users` | People at the org with roles and password hashes |
 | `api_tokens` | SHA-256 hashed machine-to-machine auth tokens |
-| `crm_connections` | Connection metadata — status, instance_url, nango_connection_id per client |
+| `crm_connections` | Connection metadata — status, instance_url, nango_connection_id, optional nango_provider_config_key per client |
 | `crm_topology_snapshots` | Full CRM schema snapshots (JSONB), versioned per client |
 | `crm_deployments` | Log of what was deployed — objects, fields, workflows, with optional conflict_report_id |
 | `crm_conflict_reports` | Pre-deploy conflict check results (green/yellow/red) |
@@ -306,7 +308,8 @@ sfdc-engine-x/
 │       ├── 004_nango_connection_id.sql
 │       ├── 005_mapping_version.sql
 │       ├── 005_deployment_partial_status.sql
-│       └── 006_analytics_deployment_types.sql
+│       ├── 006_analytics_deployment_types.sql
+│       └── 007_per_connection_provider_config.sql
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   ├── API.md
