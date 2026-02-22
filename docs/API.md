@@ -938,22 +938,14 @@ Health check endpoint. No authentication required.
 
 ---
 
-## Not Yet Implemented
+## Conflicts
 
-The following endpoints are planned but not yet built. Specs are provisional and may change during implementation.
+### POST /api/conflicts/check
 
----
-
-### Conflicts (Phase 5)
-
-#### POST /api/conflicts/check
-
-> **Status: Not Yet Implemented**
-
-Run pre-deploy conflict analysis.
+Run pre-deploy conflict analysis against the client's latest topology snapshot. Checks for object name collisions, field name collisions, automation triggers, and validation rules that may interfere with a deployment.
 
 **Auth:** API Token or JWT Session
-**Permission:** `deploy.write` (expected)
+**Permission:** `deploy.write`
 
 **Request:**
 ```json
@@ -984,6 +976,11 @@ Run pre-deploy conflict analysis.
 }
 ```
 
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `client_id` | UUID | yes | Client whose topology to check against |
+| `deployment_plan` | object | yes | Plan describing objects and fields to deploy |
+
 **Response (200):**
 ```json
 {
@@ -1000,11 +997,32 @@ Run pre-deploy conflict analysis.
 }
 ```
 
-#### POST /api/conflicts/get
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Conflict report UUID (stored for reference by deploy) |
+| `overall_severity` | string | `"green"`, `"yellow"`, or `"red"` — worst finding wins |
+| `green_count` | integer | Number of green (safe) findings |
+| `yellow_count` | integer | Number of yellow (warning) findings |
+| `red_count` | integer | Number of red (blocking) findings |
+| `findings` | array | List of individual findings with severity, category, and message |
 
-> **Status: Not Yet Implemented**
+**Errors:**
 
-Retrieve a specific conflict report.
+| Code | Detail |
+|------|--------|
+| 400 | `No topology snapshot found - run a topology pull first.` |
+| 400 | `No connected Salesforce connection found` |
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` |
+
+---
+
+### POST /api/conflicts/get
+
+Retrieve a previously stored conflict report by ID.
+
+**Auth:** API Token or JWT Session
+**Permission:** `deploy.write`
 
 **Request:**
 ```json
@@ -1013,46 +1031,78 @@ Retrieve a specific conflict report.
 }
 ```
 
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | UUID | yes | Conflict report UUID |
+
+**Response (200):**
+```json
+{
+  "id": "uuid",
+  "overall_severity": "yellow",
+  "green_count": 8,
+  "yellow_count": 2,
+  "red_count": 0,
+  "findings": [
+    { "severity": "green", "category": "object_name", "message": "Job_Posting__c does not exist — safe to create" },
+    { "severity": "yellow", "category": "automation", "message": "Active Flow 'New Contact Welcome Email' triggers on Contact create" }
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Conflict report UUID |
+| `overall_severity` | string | `"green"`, `"yellow"`, or `"red"` |
+| `green_count` | integer | Number of green findings |
+| `yellow_count` | integer | Number of yellow findings |
+| `red_count` | integer | Number of red findings |
+| `findings` | array | List of findings |
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+| 404 | `Conflict report not found` |
+
 ---
 
-### Deploy (Phase 5)
+## Deploy
 
-#### POST /api/deploy/custom-objects
+### POST /api/deploy/execute
 
-> **Status: Not Yet Implemented**
-
-Create or update custom objects and fields.
+Execute a deployment plan against the client's Salesforce. Creates custom objects and fields via the Metadata and Tooling APIs. The deployment is recorded with full plan and result for status checks and rollback.
 
 **Auth:** API Token or JWT Session
-**Permission:** `deploy.write` (expected)
+**Permission:** `deploy.write`
 
 **Request:**
 ```json
 {
   "client_id": "uuid",
-  "objects": [
-    {
-      "api_name": "Job_Posting__c",
-      "label": "Job Posting",
-      "plural_label": "Job Postings",
-      "fields": [
-        { "api_name": "Job_Title__c", "label": "Job Title", "type": "Text", "length": 255, "required": true },
-        { "api_name": "Company_Name__c", "label": "Company Name", "type": "Text", "length": 255 },
-        { "api_name": "Location__c", "label": "Location", "type": "Text", "length": 255 },
-        { "api_name": "Posting_URL__c", "label": "Posting URL", "type": "Url" },
-        { "api_name": "Date_Posted__c", "label": "Date Posted", "type": "Date" },
-        { "api_name": "Status__c", "label": "Status", "type": "Picklist", "values": ["Active", "Closed"] },
-        { "api_name": "Source__c", "label": "Source", "type": "Text", "length": 100 },
-        { "api_name": "Salary_Range__c", "label": "Salary Range", "type": "Text", "length": 100 },
-        { "api_name": "Employment_Type__c", "label": "Employment Type", "type": "Picklist", "values": ["Full-time", "Part-time", "Contract", "Temporary"] }
-      ],
-      "relationships": [
-        { "api_name": "Account__c", "label": "Company", "related_to": "Account", "type": "Lookup" }
-      ]
-    }
-  ]
+  "plan": {
+    "custom_objects": [
+      {
+        "api_name": "Job_Posting__c",
+        "label": "Job Posting",
+        "plural_label": "Job Postings",
+        "fields": [
+          { "api_name": "Job_Title__c", "label": "Job Title", "type": "Text", "length": 255 },
+          { "api_name": "Status__c", "label": "Status", "type": "Picklist", "values": ["Active", "Closed"] }
+        ]
+      }
+    ]
+  },
+  "conflict_report_id": "uuid (optional)"
 }
 ```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `client_id` | UUID | yes | Client whose Salesforce to deploy into |
+| `plan` | object | yes | Deployment plan — objects, fields, relationships |
+| `conflict_report_id` | UUID | no | Link to a prior conflict report for audit trail |
 
 **Response (200):**
 ```json
@@ -1060,42 +1110,154 @@ Create or update custom objects and fields.
   "id": "uuid",
   "status": "succeeded",
   "deployment_type": "custom_object",
-  "deployed_at": "2026-02-19T...",
+  "deployed_at": "2026-02-19T00:00:00+00:00",
   "result": {
-    "objects_created": 1,
-    "fields_created": 9,
-    "relationships_created": 1
+    "status": "succeeded",
+    "objects_created": ["Job_Posting__c"],
+    "fields_created": ["Job_Posting__c.Job_Title__c", "Job_Posting__c.Status__c"],
+    "errors": []
   }
 }
 ```
 
-#### POST /api/deploy/workflows
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Deployment UUID |
+| `status` | string | `"succeeded"`, `"partial"`, or `"failed"` |
+| `deployment_type` | string | Always `"custom_object"` |
+| `deployed_at` | string \| null | ISO timestamp of completion |
+| `result` | object \| null | Detailed result with created objects/fields and any errors |
 
-> **Status: Not Yet Implemented**
+**Errors:**
 
-Create or update automations in client's Salesforce.
+| Code | Detail |
+|------|--------|
+| 400 | `No connected Salesforce connection found` |
+| 400 | `Connection has no Nango connection ID` |
+| 400 | `Conflict report not found for this org/client` |
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` |
+| 502 | Salesforce Metadata/Tooling API error |
+
+---
+
+### POST /api/deploy/status
+
+Get the full status and details for a specific deployment.
+
+**Auth:** API Token or JWT Session
+**Permission:** `deploy.write`
 
 **Request:**
 ```json
 {
-  "client_id": "uuid",
-  "workflows": [
+  "id": "uuid"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | UUID | yes | Deployment UUID |
+
+**Response (200):**
+```json
+{
+  "id": "uuid",
+  "status": "succeeded",
+  "deployment_type": "custom_object",
+  "deployed_at": "2026-02-19T00:00:00+00:00",
+  "result": {
+    "status": "succeeded",
+    "objects_created": ["Job_Posting__c"],
+    "fields_created": ["Job_Posting__c.Job_Title__c"],
+    "errors": []
+  },
+  "plan": {
+    "custom_objects": [...]
+  },
+  "error_message": null,
+  "rolled_back_at": null
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Deployment UUID |
+| `status` | string | `"pending"`, `"in_progress"`, `"succeeded"`, `"partial"`, `"failed"`, or `"rolled_back"` |
+| `deployment_type` | string | `"custom_object"` |
+| `deployed_at` | string \| null | ISO timestamp of completion |
+| `result` | object \| null | Detailed deployment result |
+| `plan` | object | Original deployment plan |
+| `error_message` | string \| null | Error message if deployment failed |
+| `rolled_back_at` | string \| null | ISO timestamp if rolled back |
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+| 404 | `Deployment not found` |
+
+---
+
+### POST /api/deploy/history
+
+List all deployments for a client, ordered by most recent first.
+
+**Auth:** API Token or JWT Session
+**Permission:** `deploy.write`
+
+**Request:**
+```json
+{
+  "client_id": "uuid"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `client_id` | UUID | yes | Client UUID |
+
+**Response (200):**
+```json
+{
+  "data": [
     {
-      "type": "assignment_rule",
-      "label": "Assign Dallas postings to Rep A",
-      "object": "Job_Posting__c",
-      "criteria": { "Location__c": { "contains": "Dallas" } },
-      "action": { "assign_to": "user_id_or_queue" }
+      "id": "uuid",
+      "deployment_type": "custom_object",
+      "status": "succeeded",
+      "deployed_at": "2026-02-19T00:00:00+00:00",
+      "rolled_back_at": null,
+      "created_at": "2026-02-19T00:00:00+00:00"
     }
   ]
 }
 ```
 
-#### POST /api/deploy/status
+| Field | Type | Description |
+|-------|------|-------------|
+| `data[].id` | string | Deployment UUID |
+| `data[].deployment_type` | string | `"custom_object"` |
+| `data[].status` | string | Deployment status |
+| `data[].deployed_at` | string \| null | ISO timestamp of completion |
+| `data[].rolled_back_at` | string \| null | ISO timestamp if rolled back |
+| `data[].created_at` | string | ISO timestamp of creation |
 
-> **Status: Not Yet Implemented**
+**Errors:**
 
-Check deployment status.
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` |
+
+---
+
+### POST /api/deploy/rollback
+
+Roll back a succeeded deployment. Deletes the custom objects and fields that were created. Only deployments in `succeeded` status can be rolled back.
+
+**Auth:** API Token or JWT Session
+**Permission:** `deploy.write`
 
 **Request:**
 ```json
@@ -1104,45 +1266,272 @@ Check deployment status.
 }
 ```
 
-#### POST /api/deploy/rollback
-
-> **Status: Not Yet Implemented**
-
-Remove all objects/fields/workflows from a specific deployment.
-
-**Request:**
-```json
-{
-  "id": "uuid"
-}
-```
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | UUID | yes | Deployment UUID to roll back |
 
 **Response (200):**
 ```json
 {
   "id": "uuid",
   "status": "rolled_back",
-  "rolled_back_at": "2026-02-19T...",
+  "rolled_back_at": "2026-02-19T00:00:00+00:00",
   "result": {
-    "objects_removed": 1,
-    "fields_removed": 9,
-    "workflows_removed": 1
+    "status": "succeeded",
+    "objects_created": ["Job_Posting__c"],
+    "fields_created": ["Job_Posting__c.Job_Title__c"],
+    "errors": [],
+    "rollback": {
+      "objects_deleted": ["Job_Posting__c"],
+      "fields_deleted": [],
+      "errors": []
+    }
   }
 }
 ```
 
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Deployment UUID |
+| `status` | string | Always `"rolled_back"` on success |
+| `rolled_back_at` | string | ISO timestamp of rollback |
+| `result` | object \| null | Original deployment result with `rollback` key appended |
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 400 | `Deployment does not exist or is not in succeeded status` |
+| 400 | `Deployment result is missing or invalid` |
+| 400 | `No connected Salesforce connection found` |
+| 400 | `Connection has no Nango connection ID` |
+| 403 | `Insufficient permissions` |
+| 502 | Salesforce API error |
+
 ---
 
-### Push (Phase 6)
+## Field Mappings
 
-#### POST /api/push/records
+### POST /api/field-mappings/set
 
-> **Status: Not Yet Implemented**
-
-Upsert records into client's Salesforce.
+Create or update a field mapping for a client. Maps a canonical object name to a Salesforce object and provides field-level mappings used during push. Upserts on `(org_id, client_id, canonical_object)`.
 
 **Auth:** API Token or JWT Session
-**Permission:** `push.write` (expected)
+**Permission:** `org.manage`
+
+**Request:**
+```json
+{
+  "client_id": "uuid",
+  "canonical_object": "job_posting",
+  "sfdc_object": "Job_Posting__c",
+  "field_mappings": {
+    "title": "Job_Title__c",
+    "company": "Company_Name__c",
+    "url": "Posting_URL__c",
+    "status": "Status__c"
+  },
+  "external_id_field": "Posting_URL__c"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `client_id` | UUID | yes | Client UUID |
+| `canonical_object` | string | yes | Canonical object name (your internal name) |
+| `sfdc_object` | string | yes | Target Salesforce object API name |
+| `field_mappings` | object | yes | Map of canonical field names → Salesforce field API names |
+| `external_id_field` | string | no | Salesforce external ID field for upserts |
+
+**Response (200):**
+```json
+{
+  "id": "uuid",
+  "client_id": "uuid",
+  "canonical_object": "job_posting",
+  "sfdc_object": "Job_Posting__c",
+  "field_mappings": {
+    "title": "Job_Title__c",
+    "company": "Company_Name__c",
+    "url": "Posting_URL__c",
+    "status": "Status__c"
+  },
+  "external_id_field": "Posting_URL__c",
+  "is_active": true,
+  "created_at": "2026-02-19T00:00:00+00:00",
+  "updated_at": "2026-02-19T00:00:00+00:00"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Field mapping UUID |
+| `client_id` | string | Client UUID |
+| `canonical_object` | string | Canonical object name |
+| `sfdc_object` | string | Salesforce object API name |
+| `field_mappings` | object | Canonical → SFDC field map |
+| `external_id_field` | string \| null | External ID field for upserts |
+| `is_active` | boolean | Always `true` after set |
+| `created_at` | string | ISO timestamp |
+| `updated_at` | string | ISO timestamp |
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` |
+
+---
+
+### POST /api/field-mappings/list
+
+List all active field mappings for a client.
+
+**Auth:** API Token or JWT Session
+**Permission:** `org.manage`
+
+**Request:**
+```json
+{
+  "client_id": "uuid"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `client_id` | UUID | yes | Client UUID |
+
+**Response (200):**
+```json
+{
+  "data": [
+    {
+      "id": "uuid",
+      "client_id": "uuid",
+      "canonical_object": "job_posting",
+      "sfdc_object": "Job_Posting__c",
+      "field_mappings": {
+        "title": "Job_Title__c",
+        "company": "Company_Name__c"
+      },
+      "external_id_field": "Posting_URL__c",
+      "is_active": true,
+      "created_at": "2026-02-19T00:00:00+00:00",
+      "updated_at": "2026-02-19T00:00:00+00:00"
+    }
+  ]
+}
+```
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` |
+
+---
+
+### POST /api/field-mappings/get
+
+Get a specific field mapping by canonical object name.
+
+**Auth:** API Token or JWT Session
+**Permission:** `org.manage`
+
+**Request:**
+```json
+{
+  "client_id": "uuid",
+  "canonical_object": "job_posting"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `client_id` | UUID | yes | Client UUID |
+| `canonical_object` | string | yes | Canonical object name to look up |
+
+**Response (200):**
+```json
+{
+  "id": "uuid",
+  "client_id": "uuid",
+  "canonical_object": "job_posting",
+  "sfdc_object": "Job_Posting__c",
+  "field_mappings": {
+    "title": "Job_Title__c",
+    "company": "Company_Name__c"
+  },
+  "external_id_field": "Posting_URL__c",
+  "is_active": true,
+  "created_at": "2026-02-19T00:00:00+00:00",
+  "updated_at": "2026-02-19T00:00:00+00:00"
+}
+```
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` |
+| 404 | `Field mapping not found` |
+
+---
+
+### POST /api/field-mappings/delete
+
+Soft-delete a field mapping (sets `is_active = false`).
+
+**Auth:** API Token or JWT Session
+**Permission:** `org.manage`
+
+**Request:**
+```json
+{
+  "client_id": "uuid",
+  "canonical_object": "job_posting"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `client_id` | UUID | yes | Client UUID |
+| `canonical_object` | string | yes | Canonical object name to delete |
+
+**Response (200):**
+```json
+{
+  "canonical_object": "job_posting",
+  "is_active": false
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `canonical_object` | string | The deleted mapping's canonical object name |
+| `is_active` | boolean | Always `false` after delete |
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` |
+| 404 | `Field mapping not found` |
+
+---
+
+## Push
+
+### POST /api/push/records
+
+Upsert records into the client's Salesforce via the Composite API. If `canonical_object` is provided, field mappings are resolved automatically — canonical field names in the records are translated to Salesforce API names, and `object_type`/`external_id_field` default from the mapping if not provided explicitly.
+
+**Auth:** API Token or JWT Session
+**Permission:** `push.write`
 
 **Request:**
 ```json
@@ -1156,14 +1545,20 @@ Upsert records into client's Salesforce.
       "Company_Name__c": "Sysco Foods",
       "Location__c": "Dallas, TX",
       "Posting_URL__c": "https://indeed.com/job/12345",
-      "Date_Posted__c": "2026-02-18",
-      "Status__c": "Active",
-      "Source__c": "Indeed",
-      "Employment_Type__c": "Full-time"
+      "Status__c": "Active"
     }
-  ]
+  ],
+  "canonical_object": "job_posting"
 }
 ```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `client_id` | UUID | yes | Client whose Salesforce to push into |
+| `object_type` | string | yes* | Salesforce object API name. *Can be omitted if `canonical_object` is set and a field mapping exists |
+| `external_id_field` | string | yes* | Salesforce external ID field for upsert matching. *Can be omitted if resolved from field mapping |
+| `records` | array | yes | List of record objects to upsert |
+| `canonical_object` | string | no | Canonical object name — if set, resolves field mappings, object type, and external ID field automatically |
 
 **Response (200):**
 ```json
@@ -1173,54 +1568,155 @@ Upsert records into client's Salesforce.
   "records_total": 1,
   "records_succeeded": 1,
   "records_failed": 0,
-  "completed_at": "2026-02-19T..."
+  "completed_at": "2026-02-19T00:00:00+00:00"
 }
 ```
 
-#### POST /api/push/status-update
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Push log UUID |
+| `status` | string | `"succeeded"`, `"partial"`, or `"failed"` |
+| `records_total` | integer | Total records submitted |
+| `records_succeeded` | integer | Records successfully upserted |
+| `records_failed` | integer | Records that failed |
+| `completed_at` | string | ISO timestamp of completion |
 
-> **Status: Not Yet Implemented**
+**Errors:**
 
-Update field values on existing records.
+| Code | Detail |
+|------|--------|
+| 400 | `No connected Salesforce connection found` |
+| 400 | `Connection has no Nango connection ID` |
+| 400 | `object_type is required` |
+| 400 | `external_id_field is required` |
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` |
+| 502 | Salesforce Composite API error |
+
+---
+
+### POST /api/push/status
+
+Get the full status and details for a specific push operation.
+
+**Auth:** API Token or JWT Session
+**Permission:** `push.write`
 
 **Request:**
 ```json
 {
+  "id": "uuid"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | UUID | yes | Push log UUID |
+
+**Response (200):**
+```json
+{
+  "id": "uuid",
   "client_id": "uuid",
+  "status": "succeeded",
   "object_type": "Job_Posting__c",
-  "external_id_field": "Posting_URL__c",
-  "updates": [
-    {
-      "Posting_URL__c": "https://indeed.com/job/12345",
-      "Status__c": "Closed"
-    }
-  ]
+  "records_total": 1,
+  "records_succeeded": 1,
+  "records_failed": 0,
+  "result": {
+    "results": [...],
+    "errors": []
+  },
+  "error_message": null,
+  "started_at": "2026-02-19T00:00:00+00:00",
+  "completed_at": "2026-02-19T00:00:00+00:00"
 }
 ```
 
-#### POST /api/push/link
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Push log UUID |
+| `client_id` | string | Client UUID |
+| `status` | string | `"in_progress"`, `"succeeded"`, `"partial"`, or `"failed"` |
+| `object_type` | string | Salesforce object API name |
+| `records_total` | integer | Total records submitted |
+| `records_succeeded` | integer | Records successfully upserted |
+| `records_failed` | integer | Records that failed |
+| `result` | object \| null | Detailed result with per-record results and errors |
+| `error_message` | string \| null | Error message if push failed |
+| `started_at` | string \| null | ISO timestamp of push start |
+| `completed_at` | string \| null | ISO timestamp of completion |
 
-> **Status: Not Yet Implemented**
+**Errors:**
 
-Create relationships between records.
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+| 404 | `Push log not found` |
+
+---
+
+### POST /api/push/history
+
+List all push operations for a client, ordered by most recent first.
+
+**Auth:** API Token or JWT Session
+**Permission:** `push.write`
 
 **Request:**
 ```json
 {
-  "client_id": "uuid",
-  "links": [
+  "client_id": "uuid"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `client_id` | UUID | yes | Client UUID |
+
+**Response (200):**
+```json
+{
+  "data": [
     {
-      "child_object": "Job_Posting__c",
-      "child_external_id_field": "Posting_URL__c",
-      "child_external_id": "https://indeed.com/job/12345",
-      "relationship_field": "Account__c",
-      "parent_object": "Account",
-      "parent_match_field": "Website",
-      "parent_match_value": "sysco.com"
+      "id": "uuid",
+      "status": "succeeded",
+      "object_type": "Job_Posting__c",
+      "records_total": 1,
+      "records_succeeded": 1,
+      "records_failed": 0,
+      "started_at": "2026-02-19T00:00:00+00:00",
+      "completed_at": "2026-02-19T00:00:00+00:00",
+      "created_at": "2026-02-19T00:00:00+00:00"
     }
   ]
 }
 ```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `data[].id` | string | Push log UUID |
+| `data[].status` | string | Push status |
+| `data[].object_type` | string | Salesforce object API name |
+| `data[].records_total` | integer | Total records submitted |
+| `data[].records_succeeded` | integer | Records successfully upserted |
+| `data[].records_failed` | integer | Records that failed |
+| `data[].started_at` | string \| null | ISO timestamp of push start |
+| `data[].completed_at` | string \| null | ISO timestamp of completion |
+| `data[].created_at` | string | ISO timestamp of creation |
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` |
+
+---
+
+## Not Yet Implemented
+
+The following endpoints are planned but not yet built. Specs are provisional and may change during implementation.
 
 ---
 
@@ -1243,7 +1739,7 @@ List active automations in client's Salesforce.
 
 > **Status: Not Yet Implemented**
 
-Create or update automation rules. Same request shape as `POST /api/deploy/workflows`.
+Create or update automation rules.
 
 #### POST /api/workflows/remove
 
