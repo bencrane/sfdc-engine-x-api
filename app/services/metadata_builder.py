@@ -191,6 +191,79 @@ def _destructive_changes_xml(object_names: list[str]) -> str:
     return ET.tostring(root, encoding="utf-8", xml_declaration=True).decode("utf-8")
 
 
+def _append_xml_value(parent: ET.Element, tag: str, value: object) -> None:
+    if value is None:
+        return
+
+    if isinstance(value, list):
+        for item in value:
+            _append_xml_value(parent, tag, item)
+        return
+
+    child = ET.SubElement(parent, _ns(tag))
+    if isinstance(value, dict):
+        for key, nested_value in value.items():
+            _append_xml_value(child, str(key), nested_value)
+        return
+
+    if isinstance(value, bool):
+        child.text = _bool_text(value)
+        return
+
+    child.text = str(value)
+
+
+def _metadata_xml_content(root_tag: str, metadata: dict) -> str:
+    root = ET.Element(_ns(root_tag))
+    for key, value in metadata.items():
+        _append_xml_value(root, str(key), value)
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True).decode("utf-8")
+
+
+def _package_xml_for_workflows(
+    flow_api_names: list[str],
+    assignment_rule_objects: list[str],
+) -> str:
+    root = ET.Element(_ns("Package"))
+
+    if flow_api_names:
+        flow_types = ET.SubElement(root, _ns("types"))
+        for flow_api_name in flow_api_names:
+            _append_text(flow_types, "members", flow_api_name)
+        _append_text(flow_types, "name", "Flow")
+
+    if assignment_rule_objects:
+        assignment_types = ET.SubElement(root, _ns("types"))
+        for object_name in assignment_rule_objects:
+            _append_text(assignment_types, "members", object_name)
+        _append_text(assignment_types, "name", "AssignmentRules")
+
+    _append_text(root, "version", _version_number())
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True).decode("utf-8")
+
+
+def _destructive_changes_workflows_xml(
+    flow_api_names: list[str],
+    assignment_rule_objects: list[str],
+) -> str:
+    root = ET.Element(_ns("Package"))
+
+    if flow_api_names:
+        flow_types = ET.SubElement(root, _ns("types"))
+        for flow_api_name in flow_api_names:
+            _append_text(flow_types, "members", flow_api_name)
+        _append_text(flow_types, "name", "Flow")
+
+    if assignment_rule_objects:
+        assignment_types = ET.SubElement(root, _ns("types"))
+        for object_name in assignment_rule_objects:
+            _append_text(assignment_types, "members", object_name)
+        _append_text(assignment_types, "name", "AssignmentRules")
+
+    _append_text(root, "version", _version_number())
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True).decode("utf-8")
+
+
 def _zip_bytes(files: dict[str, str]) -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -221,5 +294,80 @@ def build_destructive_deploy_zip(object_names: list[str]) -> bytes:
     files = {
         "package.xml": _empty_package_xml(),
         "destructiveChanges.xml": _destructive_changes_xml(names),
+    }
+    return _zip_bytes(files)
+
+
+def build_workflow_deploy_zip(
+    flows: list[dict],
+    assignment_rules: list[dict],
+) -> bytes:
+    valid_flows: list[tuple[str, str]] = []
+    for flow in flows:
+        if not isinstance(flow, dict):
+            continue
+        flow_api_name = str(flow.get("api_name") or "").strip()
+        if not flow_api_name:
+            continue
+        raw_xml = flow.get("metadata_xml") or flow.get("xml")
+        if isinstance(raw_xml, str) and raw_xml.strip():
+            xml_content = raw_xml
+        else:
+            metadata = flow.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+            xml_content = _metadata_xml_content("Flow", metadata)
+        valid_flows.append((flow_api_name, xml_content))
+
+    valid_assignment_rules: list[tuple[str, str]] = []
+    for assignment_rule in assignment_rules:
+        if not isinstance(assignment_rule, dict):
+            continue
+        object_name = str(
+            assignment_rule.get("object")
+            or assignment_rule.get("object_api_name")
+            or assignment_rule.get("api_name")
+            or ""
+        ).strip()
+        if not object_name:
+            continue
+        raw_xml = assignment_rule.get("metadata_xml") or assignment_rule.get("xml")
+        if isinstance(raw_xml, str) and raw_xml.strip():
+            xml_content = raw_xml
+        else:
+            metadata = assignment_rule.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+            xml_content = _metadata_xml_content("AssignmentRules", metadata)
+        valid_assignment_rules.append((object_name, xml_content))
+
+    files: dict[str, str] = {
+        "package.xml": _package_xml_for_workflows(
+            flow_api_names=[flow_api_name for flow_api_name, _ in valid_flows],
+            assignment_rule_objects=[object_name for object_name, _ in valid_assignment_rules],
+        )
+    }
+    for flow_api_name, xml_content in valid_flows:
+        files[f"flows/{flow_api_name}.flow-meta.xml"] = xml_content
+    for object_name, xml_content in valid_assignment_rules:
+        files[f"assignmentRules/{object_name}.assignmentRules-meta.xml"] = xml_content
+
+    return _zip_bytes(files)
+
+
+def build_workflow_destructive_deploy_zip(
+    flow_api_names: list[str],
+    assignment_rule_objects: list[str],
+) -> bytes:
+    normalized_flow_names = [str(name).strip() for name in flow_api_names if str(name).strip()]
+    normalized_assignment_objects = [
+        str(name).strip() for name in assignment_rule_objects if str(name).strip()
+    ]
+    files = {
+        "package.xml": _empty_package_xml(),
+        "destructiveChanges.xml": _destructive_changes_workflows_xml(
+            flow_api_names=normalized_flow_names,
+            assignment_rule_objects=normalized_assignment_objects,
+        ),
     }
     return _zip_bytes(files)

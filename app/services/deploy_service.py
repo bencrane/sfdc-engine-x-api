@@ -186,6 +186,231 @@ def _metadata_failure_component(
     }
 
 
+def _workflow_metadata_components(
+    plan: dict,
+) -> tuple[list[dict], list[dict], list[dict]]:
+    components: list[dict] = []
+
+    raw_flows = plan.get("flows")
+    if not isinstance(raw_flows, list):
+        raw_flows = []
+
+    raw_assignment_rules = plan.get("assignment_rules")
+    if not isinstance(raw_assignment_rules, list):
+        raw_assignment_rules = []
+
+    valid_flows: list[dict] = []
+    for flow in raw_flows:
+        if not isinstance(flow, dict):
+            continue
+        flow_api_name = str(flow.get("api_name") or "").strip()
+        if not flow_api_name:
+            components.append(
+                {
+                    "type": "flow",
+                    "api_name": "",
+                    "success": False,
+                    "error": {
+                        "code": "invalid_plan",
+                        "message": "Flow entry is missing api_name",
+                    },
+                }
+            )
+            continue
+        valid_flows.append(flow)
+
+    valid_assignment_rules: list[dict] = []
+    for assignment_rule in raw_assignment_rules:
+        if not isinstance(assignment_rule, dict):
+            continue
+        object_name = str(
+            assignment_rule.get("object")
+            or assignment_rule.get("object_api_name")
+            or assignment_rule.get("api_name")
+            or ""
+        ).strip()
+        if not object_name:
+            components.append(
+                {
+                    "type": "assignment_rule",
+                    "api_name": "",
+                    "success": False,
+                    "error": {
+                        "code": "invalid_plan",
+                        "message": "Assignment rule entry is missing object/object_api_name",
+                    },
+                }
+            )
+            continue
+        valid_assignment_rules.append(assignment_rule)
+
+    return components, valid_flows, valid_assignment_rules
+
+
+async def execute_workflow_deployment(nango_connection_id: str, plan: dict) -> dict:
+    components, valid_flows, valid_assignment_rules = _workflow_metadata_components(plan)
+
+    planned_components: list[tuple[str, str]] = []
+    for flow in valid_flows:
+        planned_components.append(("flow", str(flow.get("api_name")).strip()))
+    for assignment_rule in valid_assignment_rules:
+        object_name = str(
+            assignment_rule.get("object")
+            or assignment_rule.get("object_api_name")
+            or assignment_rule.get("api_name")
+            or ""
+        ).strip()
+        planned_components.append(("assignment_rule", object_name))
+
+    flows_deployed = 0
+    assignment_rules_deployed = 0
+
+    if valid_flows or valid_assignment_rules:
+        try:
+            zip_bytes = metadata_builder.build_workflow_deploy_zip(
+                flows=valid_flows,
+                assignment_rules=valid_assignment_rules,
+            )
+            metadata_result = await salesforce.metadata_deploy_and_poll(
+                nango_connection_id=nango_connection_id,
+                zip_bytes=zip_bytes,
+            )
+            deploy_status = _metadata_status(metadata_result)
+            success_map, failure_map = _metadata_component_maps(metadata_result)
+
+            for component_type, api_name in planned_components:
+                failed_component = failure_map.get(api_name)
+                successful_component = success_map.get(api_name)
+                success = bool(successful_component) and not bool(failed_component)
+                if not success and not failed_component and deploy_status == "Succeeded":
+                    success = True
+
+                component_result: dict = {
+                    "type": component_type,
+                    "api_name": api_name,
+                    "success": success,
+                    "sfdc_id": (
+                        (successful_component or {}).get("id")
+                        or (successful_component or {}).get("componentId")
+                    ),
+                }
+                if not success:
+                    if failed_component:
+                        component_result["error"] = _metadata_failure_to_error(failed_component)
+                    else:
+                        component_result["error"] = {
+                            "code": "metadata_deploy_failed",
+                            "message": f"Metadata deploy ended with status {deploy_status}",
+                        }
+                else:
+                    if component_type == "flow":
+                        flows_deployed += 1
+                    elif component_type == "assignment_rule":
+                        assignment_rules_deployed += 1
+
+                components.append(component_result)
+        except HTTPException as exc:
+            for component_type, api_name in planned_components:
+                components.append(
+                    _metadata_failure_component(
+                        component_type=component_type,
+                        api_name=api_name,
+                        detail=exc.detail,
+                    )
+                )
+
+    total_components = len(components)
+    successful_components = sum(1 for component in components if component.get("success"))
+    return {
+        "status": _resolve_deployment_status(total_components, successful_components),
+        "flows_deployed": flows_deployed,
+        "assignment_rules_deployed": assignment_rules_deployed,
+        "components": components,
+    }
+
+
+async def execute_workflow_removal(
+    nango_connection_id: str,
+    flow_api_names: list[str],
+    assignment_rule_objects: list[str],
+) -> dict:
+    normalized_flow_names = [str(name).strip() for name in flow_api_names if str(name).strip()]
+    normalized_assignment_objects = [
+        str(name).strip() for name in assignment_rule_objects if str(name).strip()
+    ]
+
+    planned_components: list[tuple[str, str]] = []
+    planned_components.extend(("flow", name) for name in normalized_flow_names)
+    planned_components.extend(("assignment_rule", name) for name in normalized_assignment_objects)
+
+    components: list[dict] = []
+    flows_removed = 0
+    assignment_rules_removed = 0
+
+    if planned_components:
+        try:
+            zip_bytes = metadata_builder.build_workflow_destructive_deploy_zip(
+                flow_api_names=normalized_flow_names,
+                assignment_rule_objects=normalized_assignment_objects,
+            )
+            metadata_result = await salesforce.metadata_deploy_and_poll(
+                nango_connection_id=nango_connection_id,
+                zip_bytes=zip_bytes,
+            )
+            deploy_status = _metadata_status(metadata_result)
+            success_map, failure_map = _metadata_component_maps(metadata_result)
+
+            for component_type, api_name in planned_components:
+                failed_component = failure_map.get(api_name)
+                successful_component = success_map.get(api_name)
+                success = bool(successful_component) and not bool(failed_component)
+                if not success and not failed_component and deploy_status == "Succeeded":
+                    success = True
+
+                component_result: dict = {
+                    "type": component_type,
+                    "api_name": api_name,
+                    "success": success,
+                    "sfdc_id": (
+                        (successful_component or {}).get("id")
+                        or (successful_component or {}).get("componentId")
+                    ),
+                }
+                if not success:
+                    if failed_component:
+                        component_result["error"] = _metadata_failure_to_error(failed_component)
+                    else:
+                        component_result["error"] = {
+                            "code": "metadata_deploy_failed",
+                            "message": f"Destructive deploy ended with status {deploy_status}",
+                        }
+                else:
+                    if component_type == "flow":
+                        flows_removed += 1
+                    elif component_type == "assignment_rule":
+                        assignment_rules_removed += 1
+
+                components.append(component_result)
+        except HTTPException as exc:
+            for component_type, api_name in planned_components:
+                components.append(
+                    _metadata_failure_component(
+                        component_type=component_type,
+                        api_name=api_name,
+                        detail=exc.detail,
+                    )
+                )
+
+    total_components = len(components)
+    successful_components = sum(1 for component in components if component.get("success"))
+    return {
+        "status": _resolve_deployment_status(total_components, successful_components),
+        "flows_removed": flows_removed,
+        "assignment_rules_removed": assignment_rules_removed,
+        "components": components,
+    }
+
+
 async def execute_deployment(nango_connection_id: str, plan: dict) -> dict:
     components: list[dict] = []
     objects_created = 0

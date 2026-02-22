@@ -14,6 +14,7 @@ from app.routers.push import router as push_router
 from app.routers.topology import router as topology_router
 from app.routers.tokens import router as tokens_router
 from app.routers.users import router as users_router
+from app.routers.workflows import router as workflows_router
 from app.config import settings
 from app.db import close_pool, init_pool
 
@@ -42,6 +43,7 @@ app.include_router(push_router)
 app.include_router(topology_router)
 app.include_router(users_router)
 app.include_router(tokens_router)
+app.include_router(workflows_router)
 
 
 @app.get("/health")
