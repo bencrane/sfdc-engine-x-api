@@ -228,23 +228,23 @@ All tenant-scoped tables have `org_id` with NOT NULL constraint, foreign key, in
 - `POST /api/topology/get` — retrieve latest (or specific version) stored snapshot
 - `POST /api/topology/history` — list snapshot versions (no JSONB payload)
 
-### Conflicts (not yet implemented)
+### Conflicts
 - `POST /api/conflicts/check` — run pre-deploy conflict analysis
 - `POST /api/conflicts/get` — retrieve a specific conflict report
 
-### Deploy (not yet implemented)
-- `POST /api/deploy/custom-objects` — create/update custom objects and fields
+### Deploy
+- `POST /api/deploy/execute` — create/update custom objects and fields
 - `POST /api/deploy/analytics` — create/update report folders, reports, dashboard folders, and dashboards
-- `POST /api/deploy/workflows` — create/update Flows, assignment rules
 - `POST /api/deploy/status` — check deployment status
+- `POST /api/deploy/history` — list deployments for a client
 - `POST /api/deploy/rollback` — remove deployed objects/fields/workflows
 - `POST /api/deploy/analytics-rollback` — remove deployed analytics metadata
 
-### Push (not yet implemented)
+### Push
 - `POST /api/push/records` — upsert records into client's Salesforce
 - `POST /api/push/validate` — preflight mapping validation for push payloads
-- `POST /api/push/status-update` — update field values on existing records
-- `POST /api/push/link` — create relationships between records
+- `POST /api/push/status` — check push status
+- `POST /api/push/history` — list push history for a client
 
 ### Mappings
 - `POST /api/mappings/create` — create canonical-to-SFDC mapping for a client/object
@@ -253,7 +253,7 @@ All tenant-scoped tables have `org_id` with NOT NULL constraint, foreign key, in
 - `POST /api/mappings/update` — update active mapping fields/object/external ID
 - `POST /api/mappings/deactivate` — deactivate an active mapping
 
-### Workflows (not yet implemented)
+### Workflows
 - `POST /api/workflows/list` — list active automations
 - `POST /api/workflows/deploy` — create/update automation rules
 - `POST /api/workflows/remove` — delete deployed automations
@@ -281,7 +281,9 @@ sfdc-engine-x/
 │   │   ├── connections.py       # (empty — models inline in router)
 │   │   ├── mappings.py          # Pydantic models for mapping endpoints
 │   │   ├── topology.py          # Pydantic models for topology endpoints
-│   │   └── deployments.py       # (empty — future)
+│   │   ├── deployments.py       # Pydantic models for deploy endpoints
+│   │   ├── push.py              # Pydantic models for push endpoints
+│   │   └── workflows.py         # Pydantic models for workflow endpoints
 │   ├── routers/
 │   │   ├── __init__.py
 │   │   ├── admin.py             # Super-admin: org + user creation
@@ -292,14 +294,18 @@ sfdc-engine-x/
 │   │   ├── connections.py       # OAuth connections via Nango
 │   │   ├── mappings.py          # Mapping CRUD endpoints
 │   │   ├── topology.py          # Topology pull + snapshots
-│   │   ├── conflicts.py         # (empty — Phase 5)
-│   │   ├── deploy.py            # (empty — Phase 5)
-│   │   ├── push.py              # (empty — Phase 6)
-│   │   └── workflows.py         # (empty — Phase 7)
+│   │   ├── conflicts.py         # Conflict check + retrieval
+│   │   ├── deploy.py            # Deploy status/history/rollback + analytics deploy/rollback
+│   │   ├── push.py              # Push records/validate/status/history
+│   │   └── workflows.py         # Workflow list/deploy/remove
 │   └── services/
 │       ├── __init__.py
 │       ├── salesforce.py        # Salesforce REST API calls (list/describe objects)
-│       └── token_manager.py     # Nango client (get token, create session, delete)
+│       ├── token_manager.py     # Nango client (get token, create session, delete)
+│       ├── deploy_validators.py # Deploy plan validation (objects/workflows/analytics)
+│       ├── deploy_service.py    # Deployment + rollback + auto-mapping service
+│       ├── metadata_builder.py  # Metadata XML/ZIP builders
+│       └── push_service.py      # Composite push service
 ├── supabase/
 │   └── migrations/
 │       ├── 001_initial_schema.sql
@@ -386,10 +392,10 @@ git push origin main
 | 3 | ✅ Verified (live) | OAuth Connections via Nango |
 | 4 | ✅ Verified (live) | Topology Pull + Snapshots (1,328 objects from real Salesforce) |
 | 5A | ✅ Verified (live) | Conflict Detection — green/yellow/red scoring against real topology |
-| 5B | ✅ Built | Deploy + Rollback — Metadata API for objects and analytics (reports/dashboards), Tooling API for fields. Object deploy + rollback verified. Field visibility pending API limit reset. |
-| 6 | ✅ Verified (live) | Push + Field Mappings — mapping CRUD, preflight validation, version pinning, and composite upserts verified against real Salesforce |
-| 7 | 🔲 Next | Workflows — Flow/assignment rule deployment via Metadata API |
+| 5B | ✅ Complete | Deploy + Rollback — Metadata API for objects/analytics, Tooling API for fields, and analytics rollback implemented |
+| 6 | ✅ Complete | Push + Field Mappings — mapping CRUD, preflight validation, version pinning, and composite upserts implemented |
+| 7 | ✅ Implemented | Workflows — Flow/assignment rule list/deploy/remove via Metadata and Tooling APIs |
 
 ### Known Issues
-- **Deploy field visibility:** Custom fields deployed via Metadata API were not visible in describe during testing. Likely caused by API rate limit exhaustion (REQUEST_LIMIT_EXCEEDED on Developer Edition). Pending verification after limit reset.
+- **Deploy field visibility:** Historical Metadata API field visibility issue is mitigated with Tooling API verify/create fallback. Re-verification on fresh org limits is still recommended.
 - **Describe error surfacing:** Fixed — describe_sobject now returns structured error payloads instead of silently returning None. Errors are captured in `describe_errors` in topology snapshots.

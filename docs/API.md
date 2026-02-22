@@ -537,13 +537,15 @@ Initiate an OAuth connection for a client via Nango. Returns a Nango connect ses
 **Request:**
 ```json
 {
-  "client_id": "uuid"
+  "client_id": "uuid",
+  "nango_provider_config_key": "salesforce_partner_app_optional"
 }
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `client_id` | UUID | yes | Client to connect |
+| `nango_provider_config_key` | string | no | Per-connection Nango provider config override. Falls back to global `NANGO_PROVIDER_CONFIG_KEY` when omitted |
 
 **Response (200):**
 ```json
@@ -643,7 +645,8 @@ List connections for the org, optionally filtered to a specific client.
       "status": "connected",
       "instance_url": "https://acme.my.salesforce.com",
       "last_used_at": "2026-02-19T00:00:00+00:00",
-      "created_at": "2026-02-19T00:00:00+00:00"
+      "created_at": "2026-02-19T00:00:00+00:00",
+      "nango_provider_config_key": "salesforce_partner_app_optional"
     }
   ]
 }
@@ -686,7 +689,8 @@ Get full details for a specific connection.
   "sfdc_org_id": "00D...",
   "sfdc_user_id": "005...",
   "last_used_at": "2026-02-19T00:00:00+00:00",
-  "created_at": "2026-02-19T00:00:00+00:00"
+  "created_at": "2026-02-19T00:00:00+00:00",
+  "nango_provider_config_key": "salesforce_partner_app_optional"
 }
 ```
 
@@ -1310,6 +1314,133 @@ Roll back a succeeded deployment. Deletes the custom objects and fields that wer
 
 ---
 
+### POST /api/deploy/analytics
+
+Execute analytics metadata deployment (report folders, dashboard folders, reports, dashboards).
+
+**Auth:** API Token or JWT Session
+**Permission:** `deploy.write`
+
+**Request:**
+```json
+{
+  "client_id": "uuid",
+  "plan": {
+    "report_folders": [
+      { "api_name": "Staffing_Reports", "name": "Staffing Reports", "accessType": "Public" }
+    ],
+    "dashboard_folders": [
+      { "api_name": "Staffing_Dashboards", "name": "Staffing Dashboards", "accessType": "Public" }
+    ],
+    "reports": [
+      {
+        "api_name": "Open_Positions_By_Region",
+        "folder": "Staffing_Reports",
+        "name": "Open Positions by Region",
+        "reportType": "Position__c",
+        "format": "Summary",
+        "scope": "organization"
+      }
+    ],
+    "dashboards": [
+      {
+        "api_name": "Operations_Overview",
+        "folder": "Staffing_Dashboards",
+        "title": "Operations Overview",
+        "dashboardType": "SpecifiedUser",
+        "runningUser": "admin@example.com"
+      }
+    ]
+  },
+  "conflict_report_id": "uuid (optional)"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `client_id` | UUID | yes | Client whose Salesforce to deploy into |
+| `plan` | object | yes | Analytics deploy plan containing any subset of `report_folders`, `dashboard_folders`, `reports`, `dashboards` |
+| `conflict_report_id` | UUID | no | Optional link to conflict report |
+
+**Response (200):**
+```json
+{
+  "id": "uuid",
+  "status": "partial",
+  "deployment_type": "report",
+  "deployed_at": "2026-02-19T00:00:00+00:00",
+  "result": {
+    "status": "partial",
+    "reports_deployed": 1,
+    "dashboards_deployed": 0,
+    "folders_created": 2,
+    "components": []
+  }
+}
+```
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 400 | `invalid_deploy_plan` with structured `errors[]` |
+| 400 | `No connected Salesforce connection found` |
+| 400 | `Connection has no Nango connection ID` |
+| 400 | `Conflict report not found for this org/client` |
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` |
+| 502 | Salesforce Metadata API error |
+
+---
+
+### POST /api/deploy/analytics-rollback
+
+Roll back a succeeded analytics deployment. Uses the same rollback request/response envelope as custom-object rollback.
+
+**Auth:** API Token or JWT Session
+**Permission:** `deploy.write`
+
+**Request:**
+```json
+{
+  "id": "uuid"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | UUID | yes | Deployment UUID to roll back |
+
+**Response (200):**
+```json
+{
+  "id": "uuid",
+  "status": "rolled_back",
+  "rolled_back_at": "2026-02-19T00:00:00+00:00",
+  "result": {
+    "status": "succeeded",
+    "components": [],
+    "rollback": {
+      "status": "succeeded",
+      "components": []
+    }
+  }
+}
+```
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 400 | `Deployment does not exist or is not in succeeded status` |
+| 400 | `Deployment result is missing or invalid` |
+| 400 | `No connected Salesforce connection found` |
+| 400 | `Connection has no Nango connection ID` |
+| 403 | `Insufficient permissions` |
+| 502 | Salesforce Metadata API error |
+
+---
+
 ## Field Mappings
 
 ### POST /api/field-mappings/set
@@ -1524,6 +1655,222 @@ Soft-delete a field mapping (sets `is_active = false`).
 
 ---
 
+## Mappings
+
+Canonical-to-SFDC mapping CRUD with optimistic versioning (`mapping_version`).
+
+### POST /api/mappings/create
+
+Create an active mapping for `(client_id, canonical_object)`.
+
+**Auth:** API Token or JWT Session
+**Permission:** `org.manage`
+
+**Request:**
+```json
+{
+  "client_id": "uuid",
+  "canonical_object": "job_posting",
+  "sfdc_object": "Job_Posting__c",
+  "field_mappings": {
+    "title": "Job_Title__c",
+    "company": "Company_Name__c"
+  },
+  "external_id_field": "Posting_URL__c"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `client_id` | UUID | yes | Client UUID |
+| `canonical_object` | string | yes | Canonical object key |
+| `sfdc_object` | string | yes | Salesforce object API name |
+| `field_mappings` | object | yes | Canonical-to-SFDC field map |
+| `external_id_field` | string | no | SFDC external ID field |
+
+**Response (200):**
+```json
+{
+  "id": "uuid",
+  "canonical_object": "job_posting",
+  "sfdc_object": "Job_Posting__c",
+  "field_mappings": {
+    "title": "Job_Title__c",
+    "company": "Company_Name__c"
+  },
+  "external_id_field": "Posting_URL__c",
+  "mapping_version": 1,
+  "created_at": "2026-02-19T00:00:00+00:00"
+}
+```
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` |
+| 409 | `Mapping already exists for this client and canonical object` |
+
+---
+
+### POST /api/mappings/get
+
+Get one active mapping by client and canonical object.
+
+**Auth:** API Token or JWT Session
+**Permission:** `push.write`
+
+**Request:**
+```json
+{
+  "client_id": "uuid",
+  "canonical_object": "job_posting"
+}
+```
+
+**Response (200):**
+```json
+{
+  "id": "uuid",
+  "canonical_object": "job_posting",
+  "sfdc_object": "Job_Posting__c",
+  "field_mappings": {
+    "title": "Job_Title__c",
+    "company": "Company_Name__c"
+  },
+  "external_id_field": "Posting_URL__c",
+  "mapping_version": 3,
+  "updated_at": "2026-02-20T00:00:00+00:00"
+}
+```
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` |
+| 404 | `Mapping not found` |
+
+---
+
+### POST /api/mappings/list
+
+List all active mappings for a client.
+
+**Auth:** API Token or JWT Session
+**Permission:** `push.write`
+
+**Request:**
+```json
+{
+  "client_id": "uuid"
+}
+```
+
+**Response (200):**
+```json
+{
+  "data": [
+    {
+      "id": "uuid",
+      "canonical_object": "job_posting",
+      "sfdc_object": "Job_Posting__c",
+      "field_mappings": {
+        "title": "Job_Title__c"
+      },
+      "external_id_field": "Posting_URL__c",
+      "mapping_version": 2,
+      "updated_at": "2026-02-20T00:00:00+00:00"
+    }
+  ]
+}
+```
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` |
+
+---
+
+### POST /api/mappings/update
+
+Update one active mapping. At least one of `field_mappings`, `sfdc_object`, `external_id_field` is required. Successful updates increment `mapping_version`.
+
+**Auth:** API Token or JWT Session
+**Permission:** `org.manage`
+
+**Request:**
+```json
+{
+  "client_id": "uuid",
+  "canonical_object": "job_posting",
+  "field_mappings": {
+    "title": "Job_Title__c",
+    "company": "Company_Name__c",
+    "status": "Status__c"
+  }
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `client_id` | UUID | yes | Client UUID |
+| `canonical_object` | string | yes | Canonical object key |
+| `field_mappings` | object | no | New field mappings |
+| `sfdc_object` | string | no | New SFDC object API name |
+| `external_id_field` | string | no | New external ID field |
+
+**Response (200):** same shape as `POST /api/mappings/get`
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 400 | `No fields provided for update` |
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` |
+| 404 | `Mapping not found` |
+
+---
+
+### POST /api/mappings/deactivate
+
+Deactivate one active mapping.
+
+**Auth:** API Token or JWT Session
+**Permission:** `org.manage`
+
+**Request:**
+```json
+{
+  "client_id": "uuid",
+  "canonical_object": "job_posting"
+}
+```
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "canonical_object": "job_posting"
+}
+```
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` |
+| 404 | `Mapping not found` |
+
+---
+
 ## Push
 
 ### POST /api/push/records
@@ -1539,6 +1886,7 @@ Upsert records into the client's Salesforce via the Composite API. If `canonical
   "client_id": "uuid",
   "object_type": "Job_Posting__c",
   "external_id_field": "Posting_URL__c",
+  "mapping_version": 4,
   "records": [
     {
       "Job_Title__c": "Forklift Operator",
@@ -1557,6 +1905,7 @@ Upsert records into the client's Salesforce via the Composite API. If `canonical
 | `client_id` | UUID | yes | Client whose Salesforce to push into |
 | `object_type` | string | yes* | Salesforce object API name. *Can be omitted if `canonical_object` is set and a field mapping exists |
 | `external_id_field` | string | yes* | Salesforce external ID field for upsert matching. *Can be omitted if resolved from field mapping |
+| `mapping_version` | integer | no | Optimistic-lock version for `canonical_object` mapping. Returns 409 on mismatch |
 | `records` | array | yes | List of record objects to upsert |
 | `canonical_object` | string | no | Canonical object name — if set, resolves field mappings, object type, and external ID field automatically |
 
@@ -1589,9 +1938,57 @@ Upsert records into the client's Salesforce via the Composite API. If `canonical
 | 400 | `Connection has no Nango connection ID` |
 | 400 | `object_type is required` |
 | 400 | `external_id_field is required` |
+| 409 | `Mapping version mismatch — expected X, current is Y. Re-fetch mapping before pushing.` |
 | 403 | `Insufficient permissions` |
 | 404 | `Client not found` |
 | 502 | Salesforce Composite API error |
+
+---
+
+### POST /api/push/validate
+
+Preflight mapping validation. Checks that each requested canonical field is mapped, and optionally verifies mapped SFDC fields against the latest topology snapshot.
+
+**Auth:** API Token or JWT Session
+**Permission:** `push.write`
+
+**Request:**
+```json
+{
+  "client_id": "uuid",
+  "canonical_object": "job_posting",
+  "field_names": ["title", "company", "status"]
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `client_id` | UUID | yes | Client UUID |
+| `canonical_object` | string | yes | Canonical object key |
+| `field_names` | string[] | yes | Canonical field names to validate |
+
+**Response (200):**
+```json
+{
+  "valid": false,
+  "mapping_version": 3,
+  "sfdc_object": "Job_Posting__c",
+  "error": null,
+  "fields": {
+    "title": "mapped",
+    "company": "mapped_unverified",
+    "status": "unmapped"
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `valid` | boolean | `true` only when every requested field is mapped |
+| `mapping_version` | integer \| null | Current mapping version when mapping exists |
+| `sfdc_object` | string \| null | Mapped Salesforce object API name |
+| `error` | string \| null | Error message when no active mapping exists |
+| `fields` | object | Per-field status map: `mapped`, `mapped_unverified`, or `unmapped` |
 
 ---
 
@@ -1714,19 +2111,14 @@ List all push operations for a client, ordered by most recent first.
 
 ---
 
-## Not Yet Implemented
+## Workflows
 
-The following endpoints are planned but not yet built. Specs are provisional and may change during implementation.
+### POST /api/workflows/list
 
----
+List active FlowDefinitions and active Assignment Rules for a client.
 
-### Workflows (Phase 7)
-
-#### POST /api/workflows/list
-
-> **Status: Not Yet Implemented**
-
-List active automations in client's Salesforce.
+**Auth:** API Token or JWT Session
+**Permission:** `workflows.read`
 
 **Request:**
 ```json
@@ -1735,22 +2127,146 @@ List active automations in client's Salesforce.
 }
 ```
 
-#### POST /api/workflows/deploy
+**Response (200):**
+```json
+{
+  "flows": [
+    {
+      "id": "301...",
+      "api_name": "Candidate_Intake",
+      "active_version_id": "301...",
+      "latest_version_id": "301..."
+    }
+  ],
+  "assignment_rules": [
+    {
+      "id": "01Q...",
+      "object_name": "Lead",
+      "name": "Lead Assignment Rule",
+      "active": true
+    }
+  ]
+}
+```
 
-> **Status: Not Yet Implemented**
+**Errors:**
 
-Create or update automation rules.
+| Code | Detail |
+|------|--------|
+| 400 | `No connected Salesforce connection found` |
+| 400 | `Connection has no Nango connection ID` |
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` |
+| 502 | Salesforce Tooling API error |
 
-#### POST /api/workflows/remove
+---
 
-> **Status: Not Yet Implemented**
+### POST /api/workflows/deploy
 
-Delete deployed automations.
+Deploy workflow metadata (Flows and/or Assignment Rules) from provided plan XML/metadata payloads.
+
+**Auth:** API Token or JWT Session
+**Permission:** `workflows.write`
 
 **Request:**
 ```json
 {
   "client_id": "uuid",
-  "workflow_ids": ["uuid", "uuid"]
+  "plan": {
+    "flows": [
+      {
+        "api_name": "Candidate_Intake",
+        "xml_content": "<Flow xmlns=\"http://soap.sforce.com/2006/04/metadata\">...</Flow>"
+      }
+    ],
+    "assignment_rules": [
+      {
+        "object": "Lead",
+        "xml_content": "<AssignmentRules xmlns=\"http://soap.sforce.com/2006/04/metadata\">...</AssignmentRules>"
+      }
+    ]
+  },
+  "conflict_report_id": "uuid (optional)"
 }
 ```
+
+**Response (200):**
+```json
+{
+  "id": "uuid",
+  "status": "succeeded",
+  "deployment_type": "workflow",
+  "deployed_at": "2026-02-19T00:00:00+00:00",
+  "result": {
+    "status": "succeeded",
+    "flows_deployed": 1,
+    "assignment_rules_deployed": 1,
+    "components": []
+  }
+}
+```
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 400 | `invalid_deploy_plan` with structured `errors[]` |
+| 400 | `No connected Salesforce connection found` |
+| 400 | `Connection has no Nango connection ID` |
+| 400 | `Conflict report not found for this org/client` |
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` |
+| 502 | Salesforce Metadata API error |
+
+---
+
+### POST /api/workflows/remove
+
+Remove workflows by Flow API names and/or Assignment Rule object names.
+
+**Auth:** API Token or JWT Session
+**Permission:** `workflows.write`
+
+**Request:**
+```json
+{
+  "client_id": "uuid",
+  "flow_api_names": ["Candidate_Intake"],
+  "assignment_rule_objects": ["Lead"]
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `client_id` | UUID | yes | Client UUID |
+| `flow_api_names` | string[] | no | Flow API names to remove |
+| `assignment_rule_objects` | string[] | no | Assignment Rule object API names to remove |
+
+At least one of `flow_api_names` or `assignment_rule_objects` must be non-empty.
+
+**Response (200):**
+```json
+{
+  "id": "uuid",
+  "status": "succeeded",
+  "deployment_type": "workflow",
+  "deployed_at": "2026-02-19T00:00:00+00:00",
+  "result": {
+    "status": "succeeded",
+    "flows_removed": 1,
+    "assignment_rules_removed": 1,
+    "components": []
+  }
+}
+```
+
+**Errors:**
+
+| Code | Detail |
+|------|--------|
+| 400 | `At least one flow_api_name or assignment_rule_object is required` |
+| 400 | `No connected Salesforce connection found` |
+| 400 | `Connection has no Nango connection ID` |
+| 403 | `Insufficient permissions` |
+| 404 | `Client not found` |
+| 502 | Salesforce Metadata API error |

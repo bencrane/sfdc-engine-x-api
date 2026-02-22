@@ -8,7 +8,7 @@ Comprehensive documentation of the system. Written for AI agents or human engine
 
 `sfdc-engine-x` is a multi-tenant API service for programmatic Salesforce administration. It allows organizations (RevOps firms, agencies, internal teams) to manage their clients' Salesforce instances entirely through API — without ever logging into a client's Salesforce org.
 
-One Salesforce connected app serves all tenants. Each client authorizes via OAuth (managed by Nango). From that point on, the owning organization can read schemas, deploy custom objects, create workflows, push records, and clean up — all through sfdc-engine-x endpoints.
+One default Salesforce connected app serves all tenants, with optional per-connection provider config overrides. Each client authorizes via OAuth (managed by Nango). From that point on, the owning organization can read schemas, deploy custom objects/analytics/workflows, push records, and clean up — all through sfdc-engine-x endpoints.
 
 This is standalone infrastructure. It is not embedded in any product. Multiple products consume it:
 - **Staffing Activation** — deploys job posting objects, pushes enriched leads daily
@@ -67,6 +67,12 @@ External caller (data-engine-x, Trigger.dev, admin frontend)
 **Deployment Tracking:** Every custom object, field, and workflow deployed by sfdc-engine-x is logged. Enables rollback on churn and audit trail of what was changed.
 
 **Field Mapping Layer:** Canonical data shapes (e.g., `job_posting` with `job_title`, `company_name`) are mapped to client-specific Salesforce field names (e.g., `Job_Title__c`). The push endpoint reads mappings, not hardcoded field names.
+
+**Deploy Plan Validation:** All deploy plans are validated before Metadata ZIP construction or Tooling execution. Validation covers custom objects, workflows, and analytics plans with structured field-level errors returned as HTTP 400.
+
+**Auto-Mapping on Deploy:** Successful custom object deployments perform best-effort identity mapping upserts into `crm_field_mappings`. Existing human-defined mappings are preserved by JSONB merge precedence.
+
+**Mapping Version Pinning:** `crm_field_mappings.mapping_version` auto-increments on update. Push callers can pass `mapping_version`; stale writes are rejected with HTTP 409.
 
 **Service Layer Boundary:** No router directly calls Salesforce or Nango. All Salesforce API calls go through `app/services/salesforce.py`. All Nango calls go through `app/services/token_manager.py`. Routers never call external APIs directly.
 
@@ -171,7 +177,9 @@ Nango handles the full Salesforce OAuth lifecycle:
 4. Our `POST /api/connections/callback` endpoint confirms the connection and stores metadata (status, instance_url, sfdc_org_id, nango_connection_id)
 5. On every Salesforce API call, `token_manager.py` calls Nango to get a fresh access token
 
-**Tokens never touch our database.** Nango holds all OAuth credentials. Our `crm_connections` table stores metadata only: status, instance_url, sfdc_org_id, nango_connection_id.
+**Tokens never touch our database.** Nango holds all OAuth credentials. Our `crm_connections` table stores metadata only: status, instance_url, sfdc_org_id, nango_connection_id, optional nango_provider_config_key.
+
+Per-connection `nango_provider_config_key` (nullable) overrides the global `NANGO_PROVIDER_CONFIG_KEY` default. This supports orgs/clients that need different Salesforce Connected Apps while preserving default behavior.
 
 The `client_id` (UUID) is used as the Nango `connectionId`.
 
@@ -230,10 +238,12 @@ The `client_id` (UUID) is used as the Nango `connectionId`.
 - `POST /api/conflicts/get` — retrieve a specific conflict report
 
 ### Deploy — ✅ Implemented
-- `POST /api/deploy/custom-objects` — create/update custom objects and fields
-- `POST /api/deploy/workflows` — create/update Flows, assignment rules
+- `POST /api/deploy/execute` — create/update custom objects and fields
 - `POST /api/deploy/status` — check deployment status
+- `POST /api/deploy/history` — list deployment history for a client
 - `POST /api/deploy/rollback` — remove deployed objects/fields/workflows
+- `POST /api/deploy/analytics` — create/update report folders, reports, dashboard folders, dashboards
+- `POST /api/deploy/analytics-rollback` — remove deployed analytics metadata
 
 ### Field Mappings — ✅ Implemented
 - `POST /api/field-mappings/set` — create or update a field mapping
@@ -241,12 +251,20 @@ The `client_id` (UUID) is used as the Nango `connectionId`.
 - `POST /api/field-mappings/list` — list all mappings for a client
 - `POST /api/field-mappings/delete` — remove a field mapping
 
+### Mappings — ✅ Implemented
+- `POST /api/mappings/create` — create canonical-to-SFDC mapping for a client/object
+- `POST /api/mappings/get` — get one active mapping for a canonical object
+- `POST /api/mappings/list` — list active mappings for a client
+- `POST /api/mappings/update` — update active mapping fields/object/external ID
+- `POST /api/mappings/deactivate` — deactivate an active mapping
+
 ### Push — ✅ Implemented
 - `POST /api/push/records` — upsert records into client's Salesforce
-- `POST /api/push/status-update` — update field values on existing records
-- `POST /api/push/link` — create relationships between records
+- `POST /api/push/validate` — preflight mapping validation for push payloads
+- `POST /api/push/status` — get push status by ID
+- `POST /api/push/history` — list push history for a client
 
-### Workflows — 🔲 Not Yet Implemented (Phase 7)
+### Workflows — ✅ Implemented
 - `POST /api/workflows/list` — list active automations
 - `POST /api/workflows/deploy` — create/update automation rules
 - `POST /api/workflows/remove` — delete deployed automations
@@ -266,12 +284,12 @@ The `client_id` (UUID) is used as the Nango `connectionId`.
 | `clients` | Org's customers whose Salesforce is managed |
 | `users` | Org users with roles and bcrypt password hashes |
 | `api_tokens` | SHA-256 hashed machine-to-machine auth tokens |
-| `crm_connections` | Connection metadata — status, instance_url, sfdc_org_id, `nango_connection_id` per client (no tokens stored) |
+| `crm_connections` | Connection metadata — status, instance_url, sfdc_org_id, `nango_connection_id`, optional per-connection `nango_provider_config_key` (no tokens stored) |
 | `crm_topology_snapshots` | Versioned JSONB schema snapshots per client |
 | `crm_conflict_reports` | Pre-deploy check results (green/yellow/red) |
 | `crm_deployments` | What was deployed, when, result, rollback status — includes optional `conflict_report_id` FK |
 | `crm_push_logs` | Record push history with success/fail counts |
-| `crm_field_mappings` | Canonical-to-SFDC field mapping per client per object |
+| `crm_field_mappings` | Canonical-to-SFDC field mapping per client per object with optimistic versioning (`mapping_version`) |
 
 All tenant-scoped tables have `org_id` with NOT NULL constraint, foreign key, index, and tenant integrity triggers.
 
@@ -281,7 +299,8 @@ All tenant-scoped tables have `org_id` with NOT NULL constraint, foreign key, in
 |---|---|
 | `user_role` | org_admin, company_admin, company_member |
 | `connection_status` | pending, connected, expired, revoked, error |
-| `deployment_status` | pending, deployed, failed, rolled_back |
+| `deployment_status` | pending, in_progress, succeeded, partial, failed, rolled_back |
+| `deployment_type` | custom_object, custom_field, workflow, assignment_rule, layout, other, report, dashboard |
 | `conflict_severity` | green, yellow, red |
 | `push_status` | queued, in_progress, succeeded, partial, failed |
 
@@ -294,6 +313,9 @@ All tenant-scoped tables have `org_id` with NOT NULL constraint, foreign key, in
 | `003_conflict_report_tenant_check.sql` | Tenant integrity trigger for `crm_conflict_reports` |
 | `004_nango_connection_id.sql` | Added `nango_connection_id` column to `crm_connections` |
 | `005_deployment_partial_status.sql` | Added `partial` to `deployment_status` enum |
+| `005_mapping_version.sql` | Added `mapping_version` column + auto-increment trigger for `crm_field_mappings` |
+| `006_analytics_deployment_types.sql` | Added `report` and `dashboard` enum values to `deployment_type` |
+| `007_per_connection_provider_config.sql` | Added per-connection `nango_provider_config_key` column to `crm_connections` |
 
 ---
 
@@ -357,11 +379,13 @@ sfdc-engine-x/
 │   ├── models/
 │   │   ├── __init__.py
 │   │   ├── connections.py       # (empty — models inline in router)
+│   │   ├── mappings.py          # Pydantic models for mapping CRUD endpoints
 │   │   ├── topology.py          # Pydantic models for topology endpoints
 │   │   ├── conflicts.py         # Pydantic models for conflict check endpoints
 │   │   ├── deployments.py       # Pydantic models for deploy endpoints
 │   │   ├── field_mappings.py    # Pydantic models for field mapping endpoints
-│   │   └── push.py              # Pydantic models for push endpoints
+│   │   ├── push.py              # Pydantic models for push endpoints
+│   │   └── workflows.py         # Pydantic models for workflow endpoints
 │   ├── routers/
 │   │   ├── __init__.py
 │   │   ├── admin.py             # Super-admin: org + user creation
@@ -372,16 +396,18 @@ sfdc-engine-x/
 │   │   ├── connections.py       # OAuth connections via Nango
 │   │   ├── topology.py          # Topology pull + snapshots
 │   │   ├── conflicts.py         # Conflict check + retrieval
-│   │   ├── deploy.py            # Deploy custom objects/fields + rollback
+│   │   ├── deploy.py            # Deploy custom objects/analytics + rollback
 │   │   ├── field_mappings.py    # Field mapping CRUD
+│   │   ├── mappings.py          # Mapping CRUD + versioned updates
 │   │   ├── push.py              # Record upserts via Composite API
-│   │   └── workflows.py         # (empty — Phase 7)
+│   │   └── workflows.py         # Workflow list/deploy/remove endpoints
 │   └── services/
 │       ├── __init__.py
 │       ├── salesforce.py        # Salesforce REST API calls (list/describe objects)
 │       ├── token_manager.py     # Nango client (get token, create session, delete)
 │       ├── conflict_checker.py  # Pre-deploy conflict analysis (green/yellow/red)
-│       ├── deploy_service.py    # Metadata API deploys + Tooling API fields + rollback
+│       ├── deploy_validators.py # Deploy plan validation for objects/workflows/analytics
+│       ├── deploy_service.py    # Metadata API deploys + Tooling API fields + rollback + auto-mapping
 │       ├── metadata_builder.py  # Builds Metadata API XML payloads
 │       └── push_service.py      # Composite API record upserts with field mapping
 ├── supabase/
@@ -390,14 +416,21 @@ sfdc-engine-x/
 │       ├── 002_field_mappings_and_fixes.sql
 │       ├── 003_conflict_report_tenant_check.sql
 │       ├── 004_nango_connection_id.sql
-│       └── 005_deployment_partial_status.sql
+│       ├── 005_deployment_partial_status.sql
+│       ├── 005_mapping_version.sql
+│       ├── 006_analytics_deployment_types.sql
+│       └── 007_per_connection_provider_config.sql
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   ├── API.md
 │   ├── system_overview.md
+│   ├── SALESFORCE_ANALYTICS_METADATA_DEPLOY_REFERENCE.md
 │   ├── strategic_directive.md
 │   ├── chief_agent_directive.md
 │   └── writing_executor_directives.md
+├── scripts/
+│   ├── nango_smoke_test.py
+│   └── xml_diff.py
 ├── tests/
 │   └── __init__.py
 ├── .env.example
@@ -434,7 +467,7 @@ Railway builds from the `Dockerfile`. The Dockerfile CMD uses Doppler to inject 
 ## Key Principles
 
 1. **sfdc-engine-x never decides business logic.** It executes what the org tells it to.
-2. **One Salesforce connected app, unlimited client connections.** Per-client OAuth managed by Nango.
+2. **Default Salesforce connected app, optional per-connection overrides.** Per-client OAuth managed by Nango with optional `nango_provider_config_key` override.
 3. **Tokens are managed by Nango.** Access tokens are refreshed transparently. They never touch our database, logs, or API responses.
 4. **Everything is logged.** Deployments, pushes, topology pulls — all recorded with timestamps, org_id, client_id.
 5. **Clean up is a first-class operation.** Deployments can be rolled back.
@@ -451,18 +484,17 @@ Railway builds from the `Dockerfile`. The Dockerfile CMD uses Doppler to inject 
 | 3 | ✅ Verified (live) | OAuth Connections via Nango |
 | 4 | ✅ Verified (live) | Topology Pull + Snapshots (1,328 objects from real Salesforce) |
 | 5A | ✅ Verified (live) | Conflict Detection — green/yellow/red scoring against real topology |
-| 5B | ✅ Built | Deploy + Rollback — Metadata API for objects, Tooling API for fields. Object deploy + rollback verified. Field visibility pending API limit reset. |
-| 6A | ✅ Verified (live) | Field Mapping CRUD |
-| 6B | ✅ Verified (live) | Push — Composite API upserts with field mapping, 2 records created + updated in real Salesforce |
-| 7 | 🔲 Next | Workflows — Flow/assignment rule deployment via Metadata API |
+| 5B | ✅ Complete | Deploy + Rollback — Metadata API for objects/analytics, Tooling API for fields, rollback endpoints for both custom-object and analytics deployments |
+| 6 | ✅ Complete | Push + Mapping — mapping CRUD, auto-mapping on deploy, preflight validate, mapping version pinning, composite upserts |
+| 7 | ✅ Implemented | Workflows — list/deploy/remove (Flow + Assignment Rules) endpoints mounted |
 
 ### What's Not Built Yet
 
-- **Workflow management** — deploying/listing/removing Flows and assignment rules (Phase 7)
 - **Topology diff** — comparing two snapshots (future enhancement)
 - **RLS policies** — RLS enabled on all tables, no policies defined yet (using app-level tenant filtering with `org_id`)
+- **Deploy plan validator coverage accounting** — validation is implemented and enforced, but no generated rule-count artifact is tracked in docs/tests
 
 ### Known Issues
 
-- **Deploy field visibility:** Custom fields deployed via Metadata API were not visible in describe during testing. Likely caused by API rate limit exhaustion (REQUEST_LIMIT_EXCEEDED on Developer Edition). Pending verification after limit reset.
+- **Deploy field visibility:** Historical Metadata API field visibility issue is mitigated with Tooling API verify/create fallback in deploy service. Re-verification on fresh org limits is still recommended.
 - **Describe error surfacing:** Fixed — describe_sobject now returns structured error payloads instead of silently returning None. Errors are captured in `describe_errors` in topology snapshots.

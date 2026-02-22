@@ -179,6 +179,8 @@ Nango handles the full Salesforce OAuth lifecycle. No tokens are stored in our d
 
 The `client_id` (UUID) is used as the Nango `connectionId`, creating a 1:1 mapping between our clients and Nango connections.
 
+Each connection can optionally store a `nango_provider_config_key` override in `crm_connections`. When present, it overrides the global `NANGO_PROVIDER_CONFIG_KEY` and enables per-client Salesforce Connected App support.
+
 ### Token Lifecycle
 
 Managed entirely by Nango. Our `token_manager.get_valid_token()` calls Nango's `GET /connections/{id}` endpoint, which auto-refreshes the access token if expired and returns a valid one.
@@ -199,6 +201,16 @@ Managed entirely by Nango. Our `token_manager.get_valid_token()` calls Nango's `
 ### Service Layer Boundary
 
 All Salesforce API calls go through `app/services/salesforce.py`. All Nango calls go through `app/services/token_manager.py`. No router calls external APIs directly.
+
+### Deploy Validation
+
+Deploy plans are validated before metadata ZIP construction or Tooling execution:
+
+- `validate_custom_object_plan(plan)` validates custom objects/fields/relationships
+- `validate_workflow_plan(plan)` validates flow and assignment-rule payloads
+- `validate_analytics_plan(plan)` validates report/dashboard/folder plans
+
+Validation failures return HTTP 400 with structured per-field errors (`invalid_deploy_plan`) so callers can fix payloads deterministically before retry.
 
 ---
 
@@ -246,7 +258,7 @@ Salesforce-specific errors (rate limits, invalid field, etc.) are wrapped in 502
 ## Key Principles
 
 1. **sfdc-engine-x never decides business logic.** It executes what the org tells it to.
-2. **One Salesforce connected app, unlimited client connections.** Per-client OAuth managed by Nango.
+2. **Default Salesforce connected app, with optional per-connection overrides.** Per-client OAuth is managed by Nango; `nango_provider_config_key` supports multi-Connected-App orgs when needed.
 3. **Tokens are managed by Nango.** Access tokens are refreshed transparently. They never touch our database, logs, or API responses.
 4. **Everything is logged.** Every deployment, push, topology pull — recorded with timestamps, org_id, client_id.
 5. **Clean up is first-class.** Deployments can be rolled back. Objects, fields, workflows — all removable.
