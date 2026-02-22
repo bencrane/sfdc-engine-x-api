@@ -56,3 +56,17 @@ class PushHistoryItem(BaseModel):
 
 class PushHistoryResponse(BaseModel):
     data: list[PushHistoryItem]
+
+
+class PushValidateRequest(BaseModel):
+    client_id: UUID
+    canonical_object: str
+    field_names: list[str]
+
+
+class PushValidateResponse(BaseModel):
+    valid: bool
+    mapping_version: int | None = None
+    sfdc_object: str | None = None
+    error: str | None = None
+    fields: dict[str, str]

@@ -12,6 +12,8 @@ from app.models.push import (
     PushRecordsResponse,
     PushStatusRequest,
     PushStatusResponse,
+    PushValidateRequest,
+    PushValidateResponse,
 )
 from app.services import push_service
 
@@ -27,6 +29,29 @@ def _format_push_error_message(error: Exception) -> str:
             return f"{code}: {message}"
         return str(detail) if detail is not None else "Push failed"
     return str(error)
+
+
+def _snapshot_field_names(snapshot: object, sfdc_object: str) -> set[str]:
+    if not isinstance(snapshot, dict):
+        return set()
+    objects = snapshot.get("objects")
+    if not isinstance(objects, dict):
+        return set()
+    object_payload = objects.get(sfdc_object)
+    if not isinstance(object_payload, dict):
+        return set()
+    raw_fields = object_payload.get("fields")
+    if not isinstance(raw_fields, list):
+        return set()
+
+    names: set[str] = set()
+    for field in raw_fields:
+        if not isinstance(field, dict):
+            continue
+        name = field.get("name")
+        if isinstance(name, str) and name:
+            names.add(name)
+    return names
 
 
 @router.post("/records", response_model=PushRecordsResponse)
@@ -198,6 +223,82 @@ async def push_records(
         records_succeeded=updated_row["records_succeeded"],
         records_failed=updated_row["records_failed"],
         completed_at=updated_row["completed_at"].isoformat(),
+    )
+
+
+@router.post("/validate", response_model=PushValidateResponse)
+async def push_validate(
+    body: PushValidateRequest,
+    auth=Depends(get_current_auth),
+) -> PushValidateResponse:
+    auth.assert_permission("push.write")
+    pool = get_pool()
+
+    client_id = await validate_client_access(auth, body.client_id, pool=pool)
+    db_client_id = UUID(client_id)
+
+    mapping_row = await pool.fetchrow(
+        """
+        SELECT field_mappings, sfdc_object, mapping_version
+        FROM crm_field_mappings
+        WHERE org_id = $1
+          AND client_id = $2
+          AND canonical_object = $3
+          AND is_active = TRUE
+        """,
+        auth.org_id,
+        db_client_id,
+        body.canonical_object,
+    )
+    if mapping_row is None:
+        return PushValidateResponse(
+            valid=False,
+            error="No active mapping found for this canonical object",
+            fields={},
+        )
+
+    mapping_payload = mapping_row["field_mappings"]
+    field_mappings = mapping_payload if isinstance(mapping_payload, dict) else {}
+    sfdc_object = str(mapping_row["sfdc_object"])
+    topology_row = await pool.fetchrow(
+        """
+        SELECT snapshot
+        FROM crm_topology_snapshots
+        WHERE org_id = $1
+          AND client_id = $2
+        ORDER BY version DESC
+        LIMIT 1
+        """,
+        auth.org_id,
+        db_client_id,
+    )
+
+    topology_field_names: set[str] | None = None
+    if topology_row is not None:
+        topology_field_names = _snapshot_field_names(topology_row["snapshot"], sfdc_object)
+
+    field_statuses: dict[str, str] = {}
+    valid = True
+    for field_name in body.field_names:
+        mapped_field = field_mappings.get(field_name)
+        if not isinstance(mapped_field, str) or not mapped_field:
+            field_statuses[field_name] = "unmapped"
+            valid = False
+            continue
+
+        if topology_field_names is None:
+            field_statuses[field_name] = "mapped_unverified"
+            continue
+
+        field_statuses[field_name] = (
+            "mapped" if mapped_field in topology_field_names else "mapped_unverified"
+        )
+
+    return PushValidateResponse(
+        valid=valid,
+        mapping_version=int(mapping_row["mapping_version"]),
+        sfdc_object=sfdc_object,
+        fields=field_statuses,
     )
 
 
