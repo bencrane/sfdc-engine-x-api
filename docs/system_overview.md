@@ -225,17 +225,23 @@ The `client_id` (UUID) is used as the Nango `connectionId`.
 - `POST /api/topology/get` — retrieve latest (or specific version) stored snapshot
 - `POST /api/topology/history` — list snapshot versions (no JSONB payload)
 
-### Conflicts — 🔲 Not Yet Implemented (Phase 5)
+### Conflicts — ✅ Implemented
 - `POST /api/conflicts/check` — run pre-deploy conflict analysis
 - `POST /api/conflicts/get` — retrieve a specific conflict report
 
-### Deploy — 🔲 Not Yet Implemented (Phase 5)
+### Deploy — ✅ Implemented
 - `POST /api/deploy/custom-objects` — create/update custom objects and fields
 - `POST /api/deploy/workflows` — create/update Flows, assignment rules
 - `POST /api/deploy/status` — check deployment status
 - `POST /api/deploy/rollback` — remove deployed objects/fields/workflows
 
-### Push — 🔲 Not Yet Implemented (Phase 6)
+### Field Mappings — ✅ Implemented
+- `POST /api/field-mappings/set` — create or update a field mapping
+- `POST /api/field-mappings/get` — get mappings for a client + object
+- `POST /api/field-mappings/list` — list all mappings for a client
+- `POST /api/field-mappings/delete` — remove a field mapping
+
+### Push — ✅ Implemented
 - `POST /api/push/records` — upsert records into client's Salesforce
 - `POST /api/push/status-update` — update field values on existing records
 - `POST /api/push/link` — create relationships between records
@@ -287,6 +293,7 @@ All tenant-scoped tables have `org_id` with NOT NULL constraint, foreign key, in
 | `002_field_mappings_and_fixes.sql` | `crm_field_mappings` table and schema fixes |
 | `003_conflict_report_tenant_check.sql` | Tenant integrity trigger for `crm_conflict_reports` |
 | `004_nango_connection_id.sql` | Added `nango_connection_id` column to `crm_connections` |
+| `005_deployment_partial_status.sql` | Added `partial` to `deployment_status` enum |
 
 ---
 
@@ -351,7 +358,10 @@ sfdc-engine-x/
 │   │   ├── __init__.py
 │   │   ├── connections.py       # (empty — models inline in router)
 │   │   ├── topology.py          # Pydantic models for topology endpoints
-│   │   └── deployments.py       # (empty — future)
+│   │   ├── conflicts.py         # Pydantic models for conflict check endpoints
+│   │   ├── deployments.py       # Pydantic models for deploy endpoints
+│   │   ├── field_mappings.py    # Pydantic models for field mapping endpoints
+│   │   └── push.py              # Pydantic models for push endpoints
 │   ├── routers/
 │   │   ├── __init__.py
 │   │   ├── admin.py             # Super-admin: org + user creation
@@ -361,20 +371,26 @@ sfdc-engine-x/
 │   │   ├── tokens.py            # API token lifecycle
 │   │   ├── connections.py       # OAuth connections via Nango
 │   │   ├── topology.py          # Topology pull + snapshots
-│   │   ├── conflicts.py         # (empty — Phase 5)
-│   │   ├── deploy.py            # (empty — Phase 5)
-│   │   ├── push.py              # (empty — Phase 6)
+│   │   ├── conflicts.py         # Conflict check + retrieval
+│   │   ├── deploy.py            # Deploy custom objects/fields + rollback
+│   │   ├── field_mappings.py    # Field mapping CRUD
+│   │   ├── push.py              # Record upserts via Composite API
 │   │   └── workflows.py         # (empty — Phase 7)
 │   └── services/
 │       ├── __init__.py
 │       ├── salesforce.py        # Salesforce REST API calls (list/describe objects)
-│       └── token_manager.py     # Nango client (get token, create session, delete)
+│       ├── token_manager.py     # Nango client (get token, create session, delete)
+│       ├── conflict_checker.py  # Pre-deploy conflict analysis (green/yellow/red)
+│       ├── deploy_service.py    # Metadata API deploys + Tooling API fields + rollback
+│       ├── metadata_builder.py  # Builds Metadata API XML payloads
+│       └── push_service.py      # Composite API record upserts with field mapping
 ├── supabase/
 │   └── migrations/
 │       ├── 001_initial_schema.sql
 │       ├── 002_field_mappings_and_fixes.sql
 │       ├── 003_conflict_report_tenant_check.sql
-│       └── 004_nango_connection_id.sql
+│       ├── 004_nango_connection_id.sql
+│       └── 005_deployment_partial_status.sql
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   ├── API.md
@@ -430,21 +446,23 @@ Railway builds from the `Dockerfile`. The Dockerfile CMD uses Doppler to inject 
 
 | Phase | Status | What |
 |---|---|---|
-| 1 | ✅ Complete | Foundation — config, db pool, auth context/dependency, app shell |
-| 2 | ✅ Complete | Auth + Clients + Users + API Tokens |
-| 3 | ✅ Complete | OAuth Connections via Nango |
-| 4 | ✅ Complete | Topology Pull + Snapshots |
-| 5 | 🔲 Next | Conflicts + Deploy |
-| 6 | 🔲 Pending | Push + Field Mappings |
-| 7 | 🔲 Pending | Workflows |
+| 1 | ✅ Verified | Foundation — config, db pool, auth context/dependency, app shell |
+| 2 | ✅ Verified | Auth + Clients + Users + API Tokens |
+| 3 | ✅ Verified (live) | OAuth Connections via Nango |
+| 4 | ✅ Verified (live) | Topology Pull + Snapshots (1,328 objects from real Salesforce) |
+| 5A | ✅ Verified (live) | Conflict Detection — green/yellow/red scoring against real topology |
+| 5B | ✅ Built | Deploy + Rollback — Metadata API for objects, Tooling API for fields. Object deploy + rollback verified. Field visibility pending API limit reset. |
+| 6A | ✅ Verified (live) | Field Mapping CRUD |
+| 6B | ✅ Verified (live) | Push — Composite API upserts with field mapping, 2 records created + updated in real Salesforce |
+| 7 | 🔲 Next | Workflows — Flow/assignment rule deployment via Metadata API |
 
 ### What's Not Built Yet
 
-- **Conflict checking** — pre-deploy analysis comparing deployment plan against current topology (Phase 5)
-- **Deploy operations** — creating custom objects, fields, layouts, workflows in client Salesforce (Phase 5)
-- **Rollback logic** — removing deployed objects/fields/workflows on churn (Phase 5)
-- **Push operations** — upserting records, updating statuses, linking relationships (Phase 6)
-- **Field mapping CRUD endpoints** — table exists, no API yet (Phase 6)
 - **Workflow management** — deploying/listing/removing Flows and assignment rules (Phase 7)
 - **Topology diff** — comparing two snapshots (future enhancement)
 - **RLS policies** — RLS enabled on all tables, no policies defined yet (using app-level tenant filtering with `org_id`)
+
+### Known Issues
+
+- **Deploy field visibility:** Custom fields deployed via Metadata API were not visible in describe during testing. Likely caused by API rate limit exhaustion (REQUEST_LIMIT_EXCEEDED on Developer Edition). Pending verification after limit reset.
+- **Describe error surfacing:** Fixed — describe_sobject now returns structured error payloads instead of silently returning None. Errors are captured in `describe_errors` in topology snapshots.
