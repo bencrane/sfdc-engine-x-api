@@ -415,6 +415,249 @@ async def execute_workflow_removal(
     }
 
 
+async def execute_analytics_deployment(nango_connection_id: str, plan: dict) -> dict:
+    report_folders_raw = plan.get("report_folders")
+    if not isinstance(report_folders_raw, list):
+        report_folders_raw = []
+    dashboard_folders_raw = plan.get("dashboard_folders")
+    if not isinstance(dashboard_folders_raw, list):
+        dashboard_folders_raw = []
+    reports_raw = plan.get("reports")
+    if not isinstance(reports_raw, list):
+        reports_raw = []
+    dashboards_raw = plan.get("dashboards")
+    if not isinstance(dashboards_raw, list):
+        dashboards_raw = []
+
+    report_folders = [
+        folder
+        for folder in report_folders_raw
+        if isinstance(folder, dict) and str(folder.get("api_name") or "").strip()
+    ]
+    dashboard_folders = [
+        folder
+        for folder in dashboard_folders_raw
+        if isinstance(folder, dict) and str(folder.get("api_name") or "").strip()
+    ]
+    reports = [
+        report
+        for report in reports_raw
+        if isinstance(report, dict)
+        and str(report.get("api_name") or "").strip()
+        and str(report.get("folder") or "").strip()
+    ]
+    dashboards = [
+        dashboard
+        for dashboard in dashboards_raw
+        if isinstance(dashboard, dict)
+        and str(dashboard.get("api_name") or "").strip()
+        and str(dashboard.get("folder") or "").strip()
+    ]
+
+    planned_components: list[tuple[str, str]] = []
+    planned_components.extend(
+        ("report_folder", str(folder.get("api_name") or "").strip())
+        for folder in report_folders
+    )
+    planned_components.extend(
+        ("dashboard_folder", str(folder.get("api_name") or "").strip())
+        for folder in dashboard_folders
+    )
+    planned_components.extend(
+        (
+            "report",
+            f"{str(report.get('folder') or '').strip()}/{str(report.get('api_name') or '').strip()}",
+        )
+        for report in reports
+    )
+    planned_components.extend(
+        (
+            "dashboard",
+            f"{str(dashboard.get('folder') or '').strip()}/{str(dashboard.get('api_name') or '').strip()}",
+        )
+        for dashboard in dashboards
+    )
+
+    components: list[dict] = []
+    reports_deployed = 0
+    dashboards_deployed = 0
+    folders_created = 0
+
+    if planned_components:
+        try:
+            zip_bytes = metadata_builder.build_analytics_deploy_zip(plan)
+            metadata_result = await salesforce.metadata_deploy_and_poll(
+                nango_connection_id=nango_connection_id,
+                zip_bytes=zip_bytes,
+            )
+            deploy_status = _metadata_status(metadata_result)
+            success_map, failure_map = _metadata_component_maps(metadata_result)
+
+            for component_type, full_name in planned_components:
+                failed_component = failure_map.get(full_name)
+                successful_component = success_map.get(full_name)
+                success = bool(successful_component) and not bool(failed_component)
+                if not success and not failed_component and deploy_status == "Succeeded":
+                    success = True
+
+                component_result: dict = {
+                    "type": component_type,
+                    "api_name": full_name,
+                    "success": success,
+                    "sfdc_id": (
+                        (successful_component or {}).get("id")
+                        or (successful_component or {}).get("componentId")
+                    ),
+                }
+                if not success:
+                    if failed_component:
+                        component_result["error"] = _metadata_failure_to_error(failed_component)
+                    else:
+                        component_result["error"] = {
+                            "code": "metadata_deploy_failed",
+                            "message": f"Metadata deploy ended with status {deploy_status}",
+                        }
+                else:
+                    if component_type == "report":
+                        reports_deployed += 1
+                    elif component_type == "dashboard":
+                        dashboards_deployed += 1
+                    elif component_type in {"report_folder", "dashboard_folder"}:
+                        folders_created += 1
+
+                components.append(component_result)
+        except HTTPException as exc:
+            for component_type, full_name in planned_components:
+                components.append(
+                    _metadata_failure_component(
+                        component_type=component_type,
+                        api_name=full_name,
+                        detail=exc.detail,
+                    )
+                )
+
+    total_components = len(components)
+    successful_components = sum(1 for component in components if component.get("success"))
+    return {
+        "status": _resolve_deployment_status(total_components, successful_components),
+        "reports_deployed": reports_deployed,
+        "dashboards_deployed": dashboards_deployed,
+        "folders_created": folders_created,
+        "components": components,
+    }
+
+
+async def execute_analytics_rollback(nango_connection_id: str, deployment_result: dict) -> dict:
+    components = deployment_result.get("components")
+    if not isinstance(components, list):
+        components = []
+
+    successful_components = [
+        component
+        for component in components
+        if isinstance(component, dict) and bool(component.get("success"))
+    ]
+
+    dashboards = list(
+        dict.fromkeys(
+            str(component.get("api_name") or "").strip()
+            for component in successful_components
+            if str(component.get("type") or "") == "dashboard"
+            and str(component.get("api_name") or "").strip()
+        )
+    )
+    reports = list(
+        dict.fromkeys(
+            str(component.get("api_name") or "").strip()
+            for component in successful_components
+            if str(component.get("type") or "") == "report"
+            and str(component.get("api_name") or "").strip()
+        )
+    )
+    dashboard_folders = list(
+        dict.fromkeys(
+            str(component.get("api_name") or "").strip()
+            for component in successful_components
+            if str(component.get("type") or "") == "dashboard_folder"
+            and str(component.get("api_name") or "").strip()
+        )
+    )
+    report_folders = list(
+        dict.fromkeys(
+            str(component.get("api_name") or "").strip()
+            for component in successful_components
+            if str(component.get("type") or "") == "report_folder"
+            and str(component.get("api_name") or "").strip()
+        )
+    )
+
+    planned_components: list[tuple[str, str]] = []
+    planned_components.extend(("dashboard", full_name) for full_name in dashboards)
+    planned_components.extend(("report", full_name) for full_name in reports)
+    planned_components.extend(("dashboard_folder", full_name) for full_name in dashboard_folders)
+    planned_components.extend(("report_folder", full_name) for full_name in report_folders)
+
+    rollback_components: list[dict] = []
+    if planned_components:
+        try:
+            zip_bytes = metadata_builder.build_analytics_destructive_deploy_zip(
+                report_folders=report_folders,
+                dashboard_folders=dashboard_folders,
+                reports=reports,
+                dashboards=dashboards,
+            )
+            metadata_result = await salesforce.metadata_deploy_and_poll(
+                nango_connection_id=nango_connection_id,
+                zip_bytes=zip_bytes,
+            )
+            deploy_status = _metadata_status(metadata_result)
+            success_map, failure_map = _metadata_component_maps(metadata_result)
+
+            for component_type, full_name in planned_components:
+                failed_component = failure_map.get(full_name)
+                successful_component = success_map.get(full_name)
+                success = bool(successful_component) and not bool(failed_component)
+                if not success and not failed_component and deploy_status == "Succeeded":
+                    success = True
+
+                rollback_result: dict = {
+                    "type": component_type,
+                    "api_name": full_name,
+                    "success": success,
+                    "sfdc_id": (
+                        (successful_component or {}).get("id")
+                        or (successful_component or {}).get("componentId")
+                    ),
+                }
+                if not success:
+                    if failed_component:
+                        rollback_result["error"] = _metadata_failure_to_error(failed_component)
+                    else:
+                        rollback_result["error"] = {
+                            "code": "metadata_deploy_failed",
+                            "message": f"Destructive deploy ended with status {deploy_status}",
+                        }
+                rollback_components.append(rollback_result)
+        except HTTPException as exc:
+            for component_type, full_name in planned_components:
+                rollback_components.append(
+                    _metadata_failure_component(
+                        component_type=component_type,
+                        api_name=full_name,
+                        detail=exc.detail,
+                    )
+                )
+
+    total_components = len(rollback_components)
+    successful_count = sum(1 for component in rollback_components if component.get("success"))
+    return {
+        "status": _resolve_deployment_status(total_components, successful_count),
+        "components": rollback_components,
+        "rolled_back_components": successful_count,
+        "failed_components": total_components - successful_count,
+    }
+
+
 async def _best_effort_auto_map_custom_objects(
     *,
     pool,
