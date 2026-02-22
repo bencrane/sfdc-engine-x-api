@@ -49,7 +49,7 @@ reports/
     Opportunity_Pipeline_by_Stage.report
     Pipeline_Trended_by_Owner.report
 dashboards/
-  Revenue_Analytics_Dashboards.dashboardFolder-meta.xml
+  Revenue_Analytics_Dashboards-meta.xml
   Revenue_Analytics_Dashboards/
     Executive_Pipeline_Overview.dashboard
 ```
@@ -59,28 +59,37 @@ dashboards/
 Include folder metadata files when creating/managing folders as part of deployment:
 
 - `reports/{ReportFolderApiName}.reportFolder-meta.xml`
-- `dashboards/{DashboardFolderApiName}.dashboardFolder-meta.xml`
+- `dashboards/{DashboardFolderApiName}-meta.xml`
 
 Example `reports/Revenue_Analytics.reportFolder-meta.xml`:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <ReportFolder xmlns="http://soap.sforce.com/2006/04/metadata">
-  <!-- UNVERIFIED: Root element for report folder metadata could not be re-confirmed from accessible official page content in this environment; verify against https://developer.salesforce.com/docs/atlas.en-us.api_meta.meta/api_meta/meta_reportfolder.htm -->
-  <accessType>Public</accessType>
+  <accessType>Shared</accessType>
+  <folderShares>
+    <accessLevel>View</accessLevel>
+    <sharedTo>Sales_Team</sharedTo>
+    <sharedToType>Role</sharedToType>
+  </folderShares>
   <name>Revenue Analytics</name>
 </ReportFolder>
 ```
 
-Example `dashboards/Revenue_Analytics_Dashboards.dashboardFolder-meta.xml`:
+Valid `accessType` values: `Public`, `PublicInternal`, `Shared`, `Hidden`.
+
+Valid `accessLevel` values in `folderShares`: `View`, `EditAllContents`, `Manage`.
+
+Common `sharedToType` values: `User`, `Group`, `Role`, `RoleAndSubordinates`, `RoleAndSubordinatesInternal`, `Organization`.
+
+Example `dashboards/Revenue_Analytics_Dashboards-meta.xml`:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
-<DashboardFolder xmlns="http://soap.sforce.com/2006/04/metadata">
-  <!-- UNVERIFIED: Root element for dashboard folder metadata could not be re-confirmed from accessible official page content in this environment; verify against https://developer.salesforce.com/docs/atlas.en-us.api_meta.meta/api_meta/meta_dashboardfolder.htm -->
+<Folder xmlns="http://soap.sforce.com/2006/04/metadata">
   <accessType>Public</accessType>
   <name>Revenue Analytics Dashboards</name>
-</DashboardFolder>
+</Folder>
 ```
 
 ### `package.xml` Example (All Four Types)
@@ -148,13 +157,14 @@ Dashboard component `report` references use report fullName format:
 2. Reports (`Report`)
 3. Dashboards (`Dashboard`) referencing reports
 
-### Recommended Deploy Order
+### Deploy Mechanics
 
-1. Deploy folder metadata
-2. Deploy reports
-3. Deploy dashboards
+- Salesforce processes the deploy ZIP as one asynchronous transaction with internal dependency resolution.
+- Folders, reports, and dashboards can be deployed in one ZIP; phased deploys are not required.
+- Folders still must be explicitly declared in `package.xml` as `ReportFolder` and `DashboardFolder` members; folder paths in report/dashboard fullNames are not sufficient.
+- `rollbackOnError=true` is mandatory for production deployments.
 
-Why: dashboards resolve report references at deploy-time/activation-time; missing report members or folders produce component failures even if dashboard XML is syntactically valid.
+Why: dashboards resolve report references at deploy-time/activation-time; missing members or undeclared folder metadata produce component failures even when XML is syntactically valid.
 
 ### Failure Examples
 
@@ -211,7 +221,6 @@ The following examples are internally consistent with the ZIP/package examples a
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <Report xmlns="http://soap.sforce.com/2006/04/metadata">
-  <!-- UNVERIFIED: Could not re-confirm from accessible official page content whether <name> is the canonical top-level display-name element for Report metadata; verify against https://developer.salesforce.com/docs/atlas.en-us.api_meta.meta/api_meta/meta_report.htm -->
   <name>Opportunity Pipeline by Stage</name>
   <description>Pipeline grouped by stage for current quarter.</description>
   <format>Summary</format>
@@ -248,16 +257,20 @@ The following examples are internally consistent with the ZIP/package examples a
     <sortOrder>Asc</sortOrder>
   </groupingsAcross>
   <chart>
-    <chartType>VerticalBar</chartType>
-    <!-- UNVERIFIED: Could not re-confirm from accessible official page content whether report chart summary container is <summary> (current) versus an alternative structure such as <chartSummaries>; verify against https://developer.salesforce.com/docs/atlas.en-us.api_meta.meta/api_meta/meta_report.htm -->
-    <summary>
-      <axisBinding>y</axisBinding>
-      <column>OPPORTUNITY.AMOUNT</column>
+    <chartType>VerticalColumn</chartType>
+    <groupingColumn>STAGE_NAME</groupingColumn>
+    <chartSummaries>
       <aggregate>Sum</aggregate>
-    </summary>
+      <column>AMOUNT</column>
+    </chartSummaries>
   </chart>
 </Report>
 ```
+
+Required direct children of `<Report>`: `<format>`, `<name>`, `<reportType>`, `<scope>`.
+
+Common `chartType` values: `VerticalColumn`, `HorizontalBar`, `Line`, `LineCumulative`, `Pie`, `Donut`, `Funnel`, `Scatter`.
+<!-- MEDIUM CONFIDENCE: Aggregate enum values (for example Sum, Average, Maximum, Minimum, Count) should be validated against retrieved report chart metadata in target API version. -->
 
 ### Dashboard XML Example (References Reports)
 
@@ -273,7 +286,7 @@ The following examples are internally consistent with the ZIP/package examples a
     <components>
       <title>Pipeline by Stage</title>
       <header>Current Quarter Pipeline</header>
-      <componentType>VerticalBar</componentType>
+      <componentType>Column</componentType>
       <report>Revenue_Analytics/Opportunity_Pipeline_by_Stage</report>
       <useReportChart>false</useReportChart>
       <showPercentage>false</showPercentage>
@@ -295,6 +308,43 @@ The following examples are internally consistent with the ZIP/package examples a
   </middleSection>
 </Dashboard>
 ```
+
+Dashboard component `report` references use `FolderName/ReportApiName`.
+
+For reports in the standard public folder, use `unfiled$public/ReportApiName`.
+<!-- MEDIUM CONFIDENCE: `unfiled$public` usage should be validated in a real retrieve/deploy cycle for the target org/version. -->
+
+For namespaced packages, use `NamespaceFolderName/Namespace_ReportApiName`.
+
+Valid `componentType` values: `Bar`, `BarStacked`, `BarStacked100`, `Column`, `ColumnStacked`, `ColumnStacked100`, `Line`, `LineCumulative`, `LineGrouped`, `Pie`, `Donut`, `Funnel`, `Gauge`, `Metric`, `Table`, `Scatter`, `ScatterGrouped`. Lightning dashboards also support `FlexTable`.
+
+### Lightning Dashboard Layout (Grid-Based)
+
+Lightning dashboards use `<dashboardGridLayout>` rather than `<leftSection>`, `<middleSection>`, and `<rightSection>`. Grid placement is expressed through column/row and span coordinates, and a Lightning dashboard is identified with `<isGridLayout>true</isGridLayout>`.
+<!-- MEDIUM CONFIDENCE: Lightning grid layout structure derived from research; exact child element ordering should be validated against a real retrieve -->
+
+```xml
+<dashboardGridLayout>
+  <dashboardGridComponents>
+    <colSpan>6</colSpan>
+    <columnIndex>0</columnIndex>
+    <dashboardComponent>
+      <componentType>Column</componentType>
+      <report>Revenue_Analytics/Opportunity_Pipeline_by_Stage</report>
+    </dashboardComponent>
+    <rowIndex>0</rowIndex>
+    <rowSpan>4</rowSpan>
+  </dashboardGridComponents>
+</dashboardGridLayout>
+```
+
+### Field Reference Formats in Report Metadata
+
+- Custom object custom field: `ObjectName__c.FieldName__c`
+- Namespaced field: `namespace__ObjectName__c.namespace__FieldName__c`
+- Cross-object standard field: `Contact.Account.AccountNumber`
+- Custom report type reference: `<reportType>` uses the custom report type DeveloperName (Unique Name).
+- Standard report type examples: `Opportunity`, `AccountList`, `CampaignList` (Metadata API report deploy supports custom reports; standard reports are read-only).
 
 Practical rule: generate XML from known-good retrieved artifacts and mutate minimal nodes (`title`, filter values, member names, references), rather than hand-authoring all nodes from scratch.
 
@@ -488,7 +538,6 @@ Submit retrieve request:
         ],
         "name": "ReportFolder"
       },
-      <!-- Corrected: removed Dashboard folder member from ReportFolder type; dashboard folders belong under DashboardFolder per Metadata API type model -->
       {
         "members": [
           "Revenue_Analytics/Opportunity_Pipeline_by_Stage",
@@ -513,6 +562,15 @@ Submit retrieve request:
   }
 }
 ```
+
+### Two-Step Retrieval for Reports and Dashboards
+
+For `Report` and `Dashboard`, wildcard members (`*`) are not reliably comprehensive in many orgs/folders. Recommended retrieval workflow:
+
+1. Use `listMetadata()` scoped to each target folder to enumerate concrete `fullName` values.
+2. Use those explicit `fullName` values as `members` in the retrieve request.
+
+Retrieved files use `.report` and `.dashboard` extensions, and retrieved ZIP structure mirrors deploy structure.
 
 ### Baseline Template Workflow
 
