@@ -462,6 +462,7 @@ async def _best_effort_auto_map_custom_objects(
             ON CONFLICT (org_id, client_id, canonical_object)
             DO UPDATE SET
                 sfdc_object = EXCLUDED.sfdc_object,
+                -- Existing DB mappings on right side win on key conflict — preserves human-defined mappings over auto-generated identity mappings.
                 field_mappings = EXCLUDED.field_mappings || crm_field_mappings.field_mappings,
                 is_active = TRUE
             """,
