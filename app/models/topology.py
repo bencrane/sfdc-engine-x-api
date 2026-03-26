@@ -45,3 +45,41 @@ class TopologyHistoryItem(BaseModel):
 
 class TopologyHistoryResponse(BaseModel):
     data: list[TopologyHistoryItem]
+
+
+class PicklistRequest(BaseModel):
+    client_id: UUID
+    object_name: str
+    field_name: str
+    version: int | None = None
+
+
+class PicklistResponse(BaseModel):
+    object_name: str
+    field_name: str
+    values: list[dict]
+
+
+class TopologyDiffRequest(BaseModel):
+    client_id: UUID
+    version_a: int
+    version_b: int
+    object_names: list[str] | None = None
+
+
+class FieldChange(BaseModel):
+    name: str
+    change_type: str  # "added", "removed", "modified"
+
+
+class ObjectChange(BaseModel):
+    name: str
+    added_fields: list[str]
+    removed_fields: list[str]
+    changed_fields: list[FieldChange]
+
+
+class TopologyDiffResponse(BaseModel):
+    added_objects: list[str]
+    removed_objects: list[str]
+    changed_objects: list[ObjectChange]
