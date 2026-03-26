@@ -8,6 +8,7 @@ from app.routers.auth import router as auth_router
 from app.routers.clients import router as clients_router
 from app.routers.conflicts import router as conflicts_router
 from app.routers.connections import router as connections_router
+from app.routers.crm import router as crm_router
 from app.routers.deploy import router as deploy_router
 from app.routers.field_mappings import router as field_mappings_router
 from app.routers.mappings import router as mappings_router
@@ -18,12 +19,15 @@ from app.routers.users import router as users_router
 from app.routers.workflows import router as workflows_router
 from app.config import settings
 from app.db import close_pool, init_pool
+from app.services.sfdc_client import close_sfdc_client, init_sfdc_client
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_pool(settings.database_url)
+    await init_sfdc_client()
     yield
+    await close_sfdc_client()
     await close_pool()
 
 
@@ -37,6 +41,7 @@ app.include_router(admin_router)
 app.include_router(auth_router)
 app.include_router(clients_router)
 app.include_router(connections_router)
+app.include_router(crm_router)
 app.include_router(field_mappings_router)
 app.include_router(mappings_router)
 app.include_router(conflicts_router)

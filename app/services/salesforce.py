@@ -7,6 +7,7 @@ from fastapi import HTTPException
 
 from app.config import settings
 from app.services import token_manager
+from app.services.sfdc_client import get_sfdc_client
 
 
 def _sfdc_headers(access_token: str) -> dict[str, str]:
@@ -89,6 +90,143 @@ def _metadata_error_payload(response: httpx.Response) -> dict:
         if body:
             detail["salesforce_response"] = body
     return detail
+
+
+async def query_soql(
+    connection_id: str,
+    soql: str,
+    provider_config_key: str | None = None,
+    batch_size: int = 2000,
+) -> dict:
+    """Execute a SOQL query via the Salesforce REST Query API."""
+    access_token, instance_url = await token_manager.get_valid_token(
+        connection_id,
+        provider_config_key=provider_config_key,
+    )
+    url = (
+        f"{_sfdc_base_url(instance_url)}/services/data/"
+        f"{settings.sfdc_api_version}/query/"
+    )
+    headers = {
+        **_sfdc_headers(access_token),
+        "Sforce-Query-Options": f"batchSize={batch_size}",
+    }
+
+    client = get_sfdc_client()
+    response = await client.get(url, headers=headers, params={"q": soql})
+
+    sforce_limit = response.headers.get("Sforce-Limit-Info")
+
+    if response.status_code != 200:
+        error_code, error_message = _parse_salesforce_error(response)
+        raise HTTPException(
+            status_code=502,
+            detail={"code": error_code, "message": error_message},
+        )
+
+    body = response.json()
+    if not isinstance(body, dict):
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "salesforce_invalid_response",
+                "message": "Salesforce query response was not an object",
+            },
+        )
+
+    next_records_url = body.get("nextRecordsUrl")
+    next_records_path = None
+    if isinstance(next_records_url, str) and next_records_url:
+        next_records_path = next_records_url
+
+    result = {
+        "total_size": body.get("totalSize", 0),
+        "done": body.get("done", True),
+        "records": body.get("records", []),
+        "next_records_path": next_records_path,
+    }
+    if sforce_limit:
+        result["sforce_limit_info"] = sforce_limit
+    return result
+
+
+async def query_more(
+    connection_id: str,
+    next_records_path: str,
+    provider_config_key: str | None = None,
+) -> dict:
+    """Follow a nextRecordsUrl path for SOQL pagination."""
+    access_token, instance_url = await token_manager.get_valid_token(
+        connection_id,
+        provider_config_key=provider_config_key,
+    )
+    url = f"{_sfdc_base_url(instance_url)}{next_records_path}"
+    headers = _sfdc_headers(access_token)
+
+    client = get_sfdc_client()
+    response = await client.get(url, headers=headers)
+
+    sforce_limit = response.headers.get("Sforce-Limit-Info")
+
+    if response.status_code != 200:
+        error_code, error_message = _parse_salesforce_error(response)
+        raise HTTPException(
+            status_code=502,
+            detail={"code": error_code, "message": error_message},
+        )
+
+    body = response.json()
+    if not isinstance(body, dict):
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "salesforce_invalid_response",
+                "message": "Salesforce query more response was not an object",
+            },
+        )
+
+    next_url = body.get("nextRecordsUrl")
+    next_path = None
+    if isinstance(next_url, str) and next_url:
+        next_path = next_url
+
+    result = {
+        "total_size": body.get("totalSize", 0),
+        "done": body.get("done", True),
+        "records": body.get("records", []),
+        "next_records_path": next_path,
+    }
+    if sforce_limit:
+        result["sforce_limit_info"] = sforce_limit
+    return result
+
+
+async def describe_sobject_direct(
+    connection_id: str,
+    object_name: str,
+    provider_config_key: str | None = None,
+) -> dict:
+    """Describe a Salesforce object using the shared client."""
+    access_token, instance_url = await token_manager.get_valid_token(
+        connection_id,
+        provider_config_key=provider_config_key,
+    )
+    url = (
+        f"{_sfdc_base_url(instance_url)}/services/data/"
+        f"{settings.sfdc_api_version}/sobjects/{object_name}/describe/"
+    )
+
+    client = get_sfdc_client()
+    response = await client.get(url, headers=_sfdc_headers(access_token))
+
+    if response.status_code != 200:
+        error_code, error_message = _parse_salesforce_error(response)
+        raise HTTPException(
+            status_code=502,
+            detail={"code": error_code, "message": error_message},
+        )
+
+    return response.json()
 
 
 async def list_sobjects(

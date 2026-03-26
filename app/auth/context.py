@@ -10,15 +10,18 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "workflows.read",
         "workflows.write",
         "org.manage",
+        "crm.read",
     ],
     "company_admin": [
         "connections.read",
         "topology.read",
         "workflows.read",
+        "crm.read",
     ],
     "company_member": [
         "connections.read",
         "topology.read",
+        "crm.read",
     ],
 }
 
