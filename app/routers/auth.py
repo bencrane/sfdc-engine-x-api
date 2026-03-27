@@ -16,6 +16,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 class LoginRequest(BaseModel):
     email: str
     password: str
+    org_slug: str
 
 
 class LoginResponse(BaseModel):
@@ -38,12 +39,16 @@ async def login(body: LoginRequest) -> LoginResponse:
     pool = get_pool()
     row = await pool.fetchrow(
         """
-        SELECT id, org_id, role::text AS role, client_id, password_hash
-        FROM users
-        WHERE email = $1
-          AND is_active = TRUE
+        SELECT u.id, u.org_id, u.role::text AS role, u.client_id, u.password_hash
+        FROM users u
+        JOIN organizations o ON o.id = u.org_id
+        WHERE u.email = $1
+          AND o.slug = $2
+          AND u.is_active = TRUE
+          AND o.is_active = TRUE
         """,
         body.email,
+        body.org_slug,
     )
 
     invalid_credentials = HTTPException(

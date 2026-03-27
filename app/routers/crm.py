@@ -41,6 +41,9 @@ _OPERATOR_MAP = {
     "not_in": "NOT IN",
 }
 _ID_CHUNK_SIZE = 2000
+_NEXT_RECORDS_RE = re.compile(
+    r"^/services/data/v[0-9]+\.[0-9]+/query/[A-Za-z0-9]+-[0-9]+$"
+)
 
 
 async def _get_active_connection(
@@ -90,8 +93,12 @@ def _validate_soql(soql: str) -> None:
 
 
 def _escape_soql_value(value: str) -> str:
-    """Escape single quotes for SOQL string literals."""
-    return value.replace("'", "\\'")
+    """Escape single quotes for SOQL string literals.
+
+    SOQL uses doubled single quotes ('') not backslash escaping.
+    Also escape backslashes to prevent bypassing the quote escape.
+    """
+    return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
 def _validate_field_name(field: str) -> None:
@@ -206,7 +213,7 @@ async def query_more(
     pool = get_pool()
     client_id = await validate_client_access(auth, body.client_id, pool=pool)
 
-    if not body.next_records_path.startswith("/services/data/"):
+    if not _NEXT_RECORDS_RE.match(body.next_records_path):
         raise HTTPException(
             status_code=400, detail="Invalid next_records_path format"
         )
