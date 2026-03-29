@@ -4,13 +4,16 @@ from uuid import UUID
 from fastapi import HTTPException, Request
 
 from app.auth.context import ROLE_PERMISSIONS, AuthContext
-from app.config import settings
 from app.db import get_pool
 
-try:
-    from jose import JWTError, jwt
-except ImportError:
-    from jose import JWTError, jwt  # type: ignore[no-redef]
+import jwt
+from jwt import PyJWKClient
+
+_jwks_client = PyJWKClient(
+    "https://api.authengine.dev/api/auth/jwks",
+    cache_jwk_set=True,
+    lifespan=300,
+)
 
 
 async def get_current_auth(request: Request) -> AuthContext:
@@ -36,17 +39,20 @@ def _extract_bearer_token(request: Request) -> str:
 
 def _try_jwt(token: str) -> AuthContext | None:
     try:
+        signing_key = _jwks_client.get_signing_key_from_jwt(token)
         payload = jwt.decode(
             token,
-            settings.jwt_secret,
-            algorithms=["HS256"],
-            options={"require": ["exp"]},
+            signing_key,
+            algorithms=["EdDSA"],
+            issuer="https://api.authengine.dev",
+            audience="https://api.authengine.dev",
+            options={"require": ["exp", "sub", "org_id", "role"]},
         )
-    except JWTError:
+    except jwt.PyJWTError:
         return None
 
     org_id = payload.get("org_id")
-    user_id = payload.get("user_id")
+    user_id = payload.get("sub")
     role = payload.get("role")
 
     if not org_id or not user_id or not role:
