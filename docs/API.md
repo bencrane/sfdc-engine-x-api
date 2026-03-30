@@ -8,7 +8,7 @@ All endpoints use POST unless noted. All require authentication via Bearer token
 |--------|--------|-------|
 | Super-Admin | `Authorization: Bearer <SUPER_ADMIN_JWT_SECRET>` | Bootstrap only — org and first user creation |
 | API Token | `Authorization: Bearer <raw_token>` | Machine-to-machine — SHA-256 hashed and looked up per request |
-| JWT Session | `Authorization: Bearer <jwt>` | User login sessions — HS256 signed, contains org_id/user_id/role |
+| JWT Session | `Authorization: Bearer <jwt>` | User sessions — EdDSA signed by auth-engine-x, verified via JWKS |
 
 **Common error codes:**
 
@@ -117,49 +117,6 @@ Create a user in any organization (used for bootstrapping the first org_admin).
 ---
 
 ## Auth
-
-### POST /api/auth/login
-
-Issue a JWT session token. No authentication required.
-
-**Auth:** None
-**Permission:** None
-
-**Request:**
-```json
-{
-  "email": "admin@revenueactivation.com",
-  "password": "..."
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `email` | string | yes | User email |
-| `password` | string | yes | Plain-text password |
-
-**Response (200):**
-```json
-{
-  "access_token": "eyJ...",
-  "token_type": "bearer",
-  "expires_in": 86400
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `access_token` | string | HS256 JWT containing `org_id`, `user_id`, `role`, `client_id`, `exp` |
-| `token_type` | string | Always `"bearer"` |
-| `expires_in` | integer | Token lifetime in seconds (default 86400 = 24h) |
-
-**Errors:**
-
-| Code | Detail |
-|------|--------|
-| 401 | `Invalid credentials` |
-
----
 
 ### GET /api/auth/me
 

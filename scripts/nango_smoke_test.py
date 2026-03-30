@@ -100,30 +100,14 @@ def main() -> None:
             _print_results(results)
             return
 
-        # 3. Login to get JWT
-        r = _post(client, "/api/auth/login", "", {
-            "email": f"{org_name}@smoke.test",
-            "password": "SmokeTest123!",
-        })
-        if r["status"] < 400:
-            jwt_token = r["data"].get("access_token")
-            results["login"] = "PASS"
-        else:
-            results["login"] = "FAIL"
+        # 3. Get API token from env (auth is now via auth-engine-x, no local login)
+        api_token = os.environ.get("SMOKE_TEST_API_TOKEN")
+        if not api_token:
+            print("SMOKE_TEST_API_TOKEN not set. Provide a valid API token for the test org.")
+            results["api_token"] = "SKIP (no SMOKE_TEST_API_TOKEN)"
             _print_results(results)
             return
-
-        # 4. Create API token
-        r = _post(client, "/api/tokens/create", jwt_token, {
-            "name": "smoke-test-token",
-        })
-        if r["status"] < 400:
-            api_token = r["data"].get("token")
-            results["create_api_token"] = "PASS"
-        else:
-            results["create_api_token"] = "FAIL"
-            _print_results(results)
-            return
+        results["api_token"] = "PASS (from env)"
 
         # 5. Create test client
         r = _post(client, "/api/clients/create", api_token, {

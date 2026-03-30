@@ -25,9 +25,8 @@ This is standalone infrastructure. It is not embedded in any product. Multiple p
 | Deployment | Railway (Dockerfile) | Docker build, SSL, auto-deploy on push to main |
 | Database | Supabase Postgres via asyncpg | Direct connection, async, no ORM overhead |
 | Secrets | Doppler | Centralized secrets management, injected at runtime |
-| Auth | API tokens (SHA-256 hash) + JWT (HS256) | Machine-to-machine (tokens) and user sessions (JWT) |
+| Auth | API tokens (SHA-256 hash) + JWT (EdDSA via auth-engine-x JWKS) | Machine-to-machine (tokens) and user sessions (JWT) |
 | OAuth | Nango | Manages Salesforce OAuth flow, token storage, automatic refresh |
-| Password Hashing | bcrypt (direct) | No passlib — direct bcrypt library |
 | HTTP Client | httpx | Async HTTP for Salesforce and Nango API calls |
 | External API | Salesforce REST + Tooling + Metadata APIs | All CRM operations via stored OAuth tokens in Nango |
 
@@ -121,11 +120,12 @@ All child tables carry `org_id` for direct filtering without joins. Tenant integ
 - Query enforces both `t.is_active = TRUE` and `u.is_active = TRUE`
 - Used by: data-engine-x, trigger.dev tasks, external integrations
 
-**JWT Sessions** (user login):
-- Issued on login, signed with `JWT_SECRET` (HS256)
-- Contains: `org_id`, `user_id`, `role`, `client_id`, `exp`
+**JWT Sessions** (via auth-engine-x):
+- Issued by auth-engine-x (Better Auth), verified via JWKS (EdDSA)
+- JWKS endpoint: `https://api.authengine.dev/api/auth/jwks`
+- Contains: `sub` (user_id), `org_id`, `role`, `client_id`, `exp`
 - `exp` claim is required — tokens without expiry are rejected
-- Required claims validated: `org_id`, `user_id`, `role` must all be present
+- Required claims validated: `org_id`, `sub`, `role` must all be present
 - Unknown roles (not in ROLE_PERMISSIONS) are rejected
 - Used by: admin frontend, user-facing interfaces
 
@@ -203,7 +203,6 @@ The `client_id` (UUID) is used as the Nango `connectionId`.
 - `POST /api/super-admin/users` — create a user in any org
 
 ### Auth — ✅ Implemented
-- `POST /api/auth/login` — issue JWT session token
 - `GET /api/auth/me` — return current auth context with role and permissions
 
 ### Clients — ✅ Implemented
@@ -352,7 +351,6 @@ All secrets managed via Doppler. On Railway, set `DOPPLER_TOKEN` only — Dopple
 | Variable | Purpose |
 |---|---|
 | `DATABASE_URL` | Supabase Postgres direct connection string |
-| `JWT_SECRET` | JWT signing secret (HS256) |
 | `SUPER_ADMIN_JWT_SECRET` | Separate secret for super-admin bearer auth |
 | `SFDC_CLIENT_ID` | Salesforce connected app client ID |
 | `SFDC_CLIENT_SECRET` | Salesforce connected app client secret |
